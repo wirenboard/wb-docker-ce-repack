@@ -10,8 +10,13 @@ Homepage: https://github.com/wirenboard/wb-docker
 Package: wb-docker
 Architecture: all
 Depends: ${misc:Depends},
+         ca-certificates,
+         docker-compose,
+         docker.io,
+         systemd,
          wb-configs
 Description: Wiren Board integration package for Docker
- This package provides Wiren Board specific packaging entrypoints and
- configuration templates for Docker integration. The initial package skeleton
- intentionally does not install or configure Docker Engine.
+ This package provides Wiren Board specific lifecycle hooks, default
+ configuration templates, and recovery contracts around a Debian-packaged
+ Docker installation. It depends on Debian Docker packages, but intentionally
+ does not ship Docker Engine binaries itself.

@@ -2,6 +2,20 @@
 
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HOOK_DIR="${WB_DOCKER_HOOK_DIR:-$SCRIPT_DIR/reconcile.d}"
+ROOT="${WB_DOCKER_ROOT:-}"
+TEMPLATE_DIR="${WB_DOCKER_TEMPLATE_DIR:-/usr/share/wb-docker}"
+STATE_DIR="${WB_DOCKER_STATE_DIR:-${ROOT}/var/lib/wb-docker}"
+PERSISTENT_DIR="${WB_DOCKER_PERSISTENT_DIR:-${ROOT}/mnt/data/docker}"
+PERSISTENT_DATA_DIR="${WB_DOCKER_PERSISTENT_DATA_DIR:-${PERSISTENT_DIR}/lib}"
+PERSISTENT_RUN_DIR="${WB_DOCKER_PERSISTENT_RUN_DIR:-${PERSISTENT_DIR}/run}"
+PERSISTENT_ETC_DIR="${WB_DOCKER_PERSISTENT_ETC_DIR:-${ROOT}/mnt/data/etc/docker}"
+PERSISTENT_CONTAINERD_DIR="${WB_DOCKER_PERSISTENT_CONTAINERD_DIR:-${ROOT}/mnt/data/var/lib/containerd}"
+ETC_DOCKER_DIR="${WB_DOCKER_ETC_DOCKER_DIR:-${ROOT}/etc/docker}"
+CONTAINERD_DIR="${WB_DOCKER_CONTAINERD_DIR:-${ROOT}/var/lib/containerd}"
+ACTION_LOG="${WB_DOCKER_ACTION_LOG:-}"
+
 phase="${1:-}"
 action="${2:-}"
 previous_version="${3:-}"
@@ -11,5 +25,56 @@ if [ -z "$phase" ] || [ -z "$action" ]; then
     exit 2
 fi
 
-printf 'wb-docker-reconcile phase=%s action=%s previous=%s\n' \
-    "$phase" "$action" "${previous_version:-none}"
+needs_layout=1
+case "${phase}:${action}" in
+    postrm:remove|postrm:purge)
+        # On uninstall the hook set must be able to clean paths without the
+        # entrypoint recreating the package layout first.
+        needs_layout=0
+        ;;
+esac
+
+if [ "$needs_layout" -eq 1 ]; then
+    mkdir -p \
+        "$STATE_DIR" \
+        "$PERSISTENT_DIR" \
+        "$PERSISTENT_DATA_DIR" \
+        "$PERSISTENT_ETC_DIR" \
+        "$PERSISTENT_CONTAINERD_DIR" \
+        "$(dirname "$ETC_DOCKER_DIR")" \
+        "$(dirname "$CONTAINERD_DIR")"
+fi
+
+export WB_DOCKER_ROOT="$ROOT"
+export WB_DOCKER_TEMPLATE_DIR="$TEMPLATE_DIR"
+export WB_DOCKER_STATE_DIR="$STATE_DIR"
+export WB_DOCKER_PERSISTENT_DIR="$PERSISTENT_DIR"
+export WB_DOCKER_PERSISTENT_DATA_DIR="$PERSISTENT_DATA_DIR"
+export WB_DOCKER_PERSISTENT_RUN_DIR="$PERSISTENT_RUN_DIR"
+export WB_DOCKER_PERSISTENT_ETC_DIR="$PERSISTENT_ETC_DIR"
+export WB_DOCKER_PERSISTENT_CONTAINERD_DIR="$PERSISTENT_CONTAINERD_DIR"
+export WB_DOCKER_ETC_DOCKER_DIR="$ETC_DOCKER_DIR"
+export WB_DOCKER_CONTAINERD_DIR="$CONTAINERD_DIR"
+export WB_DOCKER_PHASE="$phase"
+export WB_DOCKER_ACTION="$action"
+export WB_DOCKER_PREVIOUS_VERSION="$previous_version"
+export WB_DOCKER_ACTION_LOG="$ACTION_LOG"
+
+log() {
+    printf '%s\n' "$1"
+    if [ -n "$ACTION_LOG" ]; then
+        printf '%s\n' "$1" >> "$ACTION_LOG"
+    fi
+}
+
+log "wb-docker-reconcile phase=$phase action=$action previous=${previous_version:-none}"
+
+if [ -d "$HOOK_DIR" ]; then
+    for hook in "$HOOK_DIR"/*; do
+        [ -f "$hook" ] || continue
+        [ -x "$hook" ] || continue
+        # Hooks are ordered by filename so each step can assume earlier
+        # filesystem reconciliation has already run.
+        "$hook"
+    done
+fi

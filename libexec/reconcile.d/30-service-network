@@ -1,0 +1,170 @@
+#!/bin/sh
+
+set -eu
+
+phase="${WB_DOCKER_PHASE:-}"
+action="${WB_DOCKER_ACTION:-}"
+root="${WB_DOCKER_ROOT:-}"
+wb_release_file="${WB_DOCKER_WB_RELEASE_FILE:-${root}/etc/wb-release}"
+systemctl_bin="${WB_DOCKER_SYSTEMCTL_BIN:-systemctl}"
+update_alternatives_bin="${WB_DOCKER_UPDATE_ALTERNATIVES_BIN:-update-alternatives}"
+alternative_state_dir="${WB_DOCKER_STATE_DIR}/alternatives"
+
+log() {
+    printf '%s\n' "$1"
+}
+
+release_needs_legacy_iptables() {
+    [ -f "$wb_release_file" ] || return 1
+
+    # Docker networking on supported WB releases follows the documented
+    # iptables-legacy setup, including rolling images that map to those bases.
+    release_name=$(
+        sed -n 's/^RELEASE_NAME=//p' "$wb_release_file" \
+            | head -n 1 \
+            | tr -d '"'
+    )
+
+    case "$release_name" in
+        wb-[0-9][0-9][0-9][0-9])
+            release_number=${release_name#wb-}
+            [ "$release_number" -ge 2304 ]
+            ;;
+        unstable.latest)
+            return 0
+            ;;
+        *)
+            target=$(
+                sed -n 's/^TARGET=//p' "$wb_release_file" \
+                    | head -n 1 \
+                    | tr -d '"'
+            )
+
+            case "$target" in
+                */bullseye|*/bookworm)
+                    return 0
+                    ;;
+                *)
+                    return 1
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+ensure_legacy_alternative() {
+    name="$1"
+    link_path="$2"
+    legacy_path="$3"
+    nft_path="$4"
+    previous_state_file="$alternative_state_dir/$name.previous"
+
+    if [ ! -x "$legacy_path" ]; then
+        log "wb-docker-reconcile skip ${name}=legacy reason=missing-binary"
+        return 0
+    fi
+
+    if [ ! -f "$previous_state_file" ]; then
+        mkdir -p "$alternative_state_dir"
+        # Store the previous alternative before changing it so remove/purge can
+        # restore the host to its pre-install networking backend.
+        previous_value=$(
+            "$update_alternatives_bin" --query "$name" 2>/dev/null \
+                | sed -n 's/^Value: //p' \
+                | head -n 1
+        )
+        if [ -n "$previous_value" ]; then
+            printf '%s\n' "$previous_value" > "$previous_state_file"
+        elif [ -x "$nft_path" ]; then
+            printf '%s\n' "$nft_path" > "$previous_state_file"
+        fi
+    fi
+
+    if ! "$update_alternatives_bin" --query "$name" >/dev/null 2>&1; then
+        if [ -x "$nft_path" ]; then
+            "$update_alternatives_bin" --install \
+                "$link_path" "$name" "$nft_path" 10
+        fi
+        "$update_alternatives_bin" --install \
+            "$link_path" "$name" "$legacy_path" 20
+    fi
+
+    "$update_alternatives_bin" --set "$name" "$legacy_path"
+}
+
+restore_alternative() {
+    name="$1"
+    previous_state_file="$alternative_state_dir/$name.previous"
+
+    [ -f "$previous_state_file" ] || return 0
+
+    previous_value=$(cat "$previous_state_file")
+    [ -n "$previous_value" ] || return 0
+
+    if [ ! -x "$previous_value" ]; then
+        log "wb-docker-reconcile skip ${name}=restore reason=missing-binary"
+        return 0
+    fi
+
+    if "$update_alternatives_bin" --query "$name" >/dev/null 2>&1; then
+        if ! "$update_alternatives_bin" --set "$name" "$previous_value"; then
+            log "wb-docker-reconcile skip ${name}=restore reason=set-failed"
+        fi
+    fi
+}
+
+unit_exists() {
+    load_state=$("$systemctl_bin" show --property=LoadState --value "$1" 2>/dev/null || true)
+    [ "$load_state" = "loaded" ]
+}
+
+enable_and_start_unit() {
+    unit="$1"
+
+    if ! unit_exists "$unit"; then
+        log "wb-docker-reconcile skip ${unit} reason=missing-unit"
+        return 0
+    fi
+
+    "$systemctl_bin" enable "$unit"
+
+    if "$systemctl_bin" is-active --quiet "$unit"; then
+        if ! "$systemctl_bin" restart "$unit"; then
+            log "wb-docker-reconcile skip ${unit} reason=restart-failed"
+        fi
+    else
+        if ! "$systemctl_bin" start "$unit"; then
+            log "wb-docker-reconcile skip ${unit} reason=start-failed"
+        fi
+    fi
+}
+
+case "${phase}:${action}" in
+    postinst:configure|postinst:abort-upgrade|postinst:abort-remove|postinst:abort-deconfigure)
+        if release_needs_legacy_iptables; then
+            ensure_legacy_alternative \
+                iptables \
+                "${root}/usr/sbin/iptables" \
+                "${root}/usr/sbin/iptables-legacy" \
+                "${root}/usr/sbin/iptables-nft"
+            ensure_legacy_alternative \
+                ip6tables \
+                "${root}/usr/sbin/ip6tables" \
+                "${root}/usr/sbin/ip6tables-legacy" \
+                "${root}/usr/sbin/ip6tables-nft"
+        fi
+
+        # Docker packages own the units; wb-docker only enables/restarts them
+        # when they are already installed on the target system.
+        if command -v "$systemctl_bin" >/dev/null 2>&1; then
+            enable_and_start_unit containerd.service
+            enable_and_start_unit docker.service
+        else
+            log "wb-docker-reconcile skip systemd reason=systemctl-unavailable"
+        fi
+        ;;
+    postrm:remove|postrm:purge)
+        restore_alternative iptables
+        restore_alternative ip6tables
+        ;;
+esac

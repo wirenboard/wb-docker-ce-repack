@@ -1,4 +1,9 @@
 {
   "data-root": "/mnt/data/docker/lib",
-  "exec-root": "/run/docker"
+  "exec-root": "/run/docker",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
 }

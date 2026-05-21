@@ -1,0 +1,56 @@
+#!/bin/sh
+
+set -eu
+
+remove_if_symlink() {
+    path="$1"
+
+    if [ -L "$path" ]; then
+        rm -f "$path"
+    fi
+}
+
+warn_purge_removes_data() {
+    message="WARNING: apt purge wb-docker removes persistent Docker data"
+
+    printf '%s\n' "$message" >&2
+    if [ -n "${WB_DOCKER_ACTION_LOG:-}" ]; then
+        printf '%s\n' "$message" >> "$WB_DOCKER_ACTION_LOG"
+    fi
+}
+
+remove_dir_if_empty() {
+    path="$1"
+
+    if [ -d "$path" ] && rmdir "$path" 2>/dev/null; then
+        :
+    fi
+}
+
+case "${WB_DOCKER_PHASE}:${WB_DOCKER_ACTION}" in
+    postrm:remove)
+        # remove keeps persistent Docker state and only drops the rootfs-facing
+        # integration owned by this package.
+        remove_if_symlink "$WB_DOCKER_ETC_DOCKER_DIR"
+        remove_if_symlink "$WB_DOCKER_CONTAINERD_DIR"
+        remove_dir_if_empty "$WB_DOCKER_ETC_DOCKER_DIR"
+        rm -rf "$WB_DOCKER_STATE_DIR"
+        ;;
+    postrm:purge)
+        # purge is intentionally destructive and mirrors Debian's "remove all
+        # package state" expectation for administrators.
+        warn_purge_removes_data
+        remove_if_symlink "$WB_DOCKER_ETC_DOCKER_DIR"
+        remove_if_symlink "$WB_DOCKER_CONTAINERD_DIR"
+        remove_dir_if_empty "$WB_DOCKER_ETC_DOCKER_DIR"
+        rm -rf \
+            "$WB_DOCKER_STATE_DIR" \
+            "$WB_DOCKER_PERSISTENT_ETC_DIR" \
+            "$WB_DOCKER_PERSISTENT_CONTAINERD_DIR" \
+            "$WB_DOCKER_PERSISTENT_DIR"
+        remove_dir_if_empty "${WB_DOCKER_PERSISTENT_ETC_DIR%/docker}"
+        remove_dir_if_empty "${WB_DOCKER_PERSISTENT_CONTAINERD_DIR%/containerd}"
+        remove_dir_if_empty "${WB_DOCKER_PERSISTENT_CONTAINERD_DIR%/lib/containerd}"
+        remove_dir_if_empty "${WB_DOCKER_PERSISTENT_DIR%/docker}"
+        ;;
+esac
