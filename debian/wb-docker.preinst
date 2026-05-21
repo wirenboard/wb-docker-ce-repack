@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -eu
+
+helper="/usr/lib/wb-docker/wb-docker-reconcile"
+
+case "${1:-}" in
+    install|upgrade)
+        if [ -x "$helper" ]; then
+            "$helper" preinst "$1" "${2:-}"
+        fi
+        ;;
+    abort-upgrade)
+        ;;
+    *)
+        echo "preinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

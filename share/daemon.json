@@ -1,0 +1,4 @@
+{
+  "data-root": "/mnt/data/docker/lib",
+  "exec-root": "/run/docker"
+}

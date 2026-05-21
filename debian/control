@@ -1,0 +1,17 @@
+Source: wb-docker
+Section: admin
+Priority: optional
+Maintainer: Wiren Board Team <info@wirenboard.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/wirenboard/wb-docker
+
+Package: wb-docker
+Architecture: all
+Depends: ${misc:Depends},
+         wb-configs
+Description: Wiren Board integration package for Docker
+ This package provides Wiren Board specific packaging entrypoints and
+ configuration templates for Docker integration. The initial package skeleton
+ intentionally does not install or configure Docker Engine.

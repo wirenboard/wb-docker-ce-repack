@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -eu
+
+helper="/usr/lib/wb-docker/wb-docker-reconcile"
+
+case "${1:-}" in
+    configure|abort-upgrade|abort-remove|abort-deconfigure)
+        "$helper" postinst "$1" "${2:-}"
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -eu
+
+helper="/usr/lib/wb-docker/wb-docker-reconcile"
+
+case "${1:-}" in
+    remove|upgrade|deconfigure|failed-upgrade)
+        "$helper" prerm "$1" "${2:-}"
+        ;;
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

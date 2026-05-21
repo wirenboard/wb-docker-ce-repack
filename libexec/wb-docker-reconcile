@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+phase="${1:-}"
+action="${2:-}"
+previous_version="${3:-}"
+
+if [ -z "$phase" ] || [ -z "$action" ]; then
+    echo "usage: $0 <phase> <action> [previous-version]" >&2
+    exit 2
+fi
+
+printf 'wb-docker-reconcile phase=%s action=%s previous=%s\n' \
+    "$phase" "$action" "${previous_version:-none}"
