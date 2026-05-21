@@ -1,3 +1,4 @@
 libexec/wb-docker-reconcile usr/lib/wb-docker/
+libexec/reconcile.d/* usr/lib/wb-docker/reconcile.d/
 share/daemon.json usr/share/wb-docker/
 configs/20wb-docker etc/wb-configs.d/

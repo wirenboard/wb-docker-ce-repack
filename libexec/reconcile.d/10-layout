@@ -1,0 +1,67 @@
+#!/bin/sh
+
+set -eu
+
+case "${WB_DOCKER_PHASE}:${WB_DOCKER_ACTION}" in
+    postrm:remove|postrm:purge)
+        exit 0
+        ;;
+esac
+
+mkdir -p \
+    "$WB_DOCKER_STATE_DIR/lifecycle" \
+    "$WB_DOCKER_PERSISTENT_DIR" \
+    "$WB_DOCKER_PERSISTENT_DATA_DIR" \
+    "$WB_DOCKER_PERSISTENT_ETC_DIR" \
+    "$WB_DOCKER_PERSISTENT_CONTAINERD_DIR" \
+    "$(dirname "$WB_DOCKER_ETC_DOCKER_DIR")" \
+    "$(dirname "$WB_DOCKER_CONTAINERD_DIR")"
+
+migrate_dir_contents() {
+    source_dir="$1"
+    dest_dir="$2"
+
+    # Preserve user data when an old rootfs directory already exists: move
+    # non-conflicting entries to the persistent location and leave conflicts for
+    # an operator instead of overwriting them.
+    for path in "$source_dir"/* "$source_dir"/.[!.]* "$source_dir"/..?*; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+
+        name=${path##*/}
+        dest="$dest_dir/$name"
+
+        if [ -L "$path" ] && [ "$(readlink "$path")" = "$dest" ]; then
+            rm -f "$path"
+        elif [ ! -e "$dest" ]; then
+            mv "$path" "$dest"
+        elif [ -f "$path" ] && [ -f "$dest" ] && cmp -s "$path" "$dest"; then
+            rm -f "$path"
+        else
+            echo "wb-docker-reconcile keep $path reason=persistent-conflict" >&2
+        fi
+    done
+}
+
+if [ -L "$WB_DOCKER_CONTAINERD_DIR" ]; then
+    if [ "$(readlink "$WB_DOCKER_CONTAINERD_DIR")" != "$WB_DOCKER_PERSISTENT_CONTAINERD_DIR" ]; then
+        rm -f "$WB_DOCKER_CONTAINERD_DIR"
+    fi
+elif [ -d "$WB_DOCKER_CONTAINERD_DIR" ]; then
+    # containerd may already have mutable state in /var/lib/containerd before
+    # wb-docker is installed; migrate it before replacing the path with a link.
+    migrate_dir_contents "$WB_DOCKER_CONTAINERD_DIR" "$WB_DOCKER_PERSISTENT_CONTAINERD_DIR"
+    rmdir "$WB_DOCKER_CONTAINERD_DIR" 2>/dev/null || {
+        echo "wb-docker-reconcile failed containerd migration reason=rootfs-dir-not-empty" >&2
+        exit 1
+    }
+elif [ -e "$WB_DOCKER_CONTAINERD_DIR" ]; then
+    echo "wb-docker-reconcile failed containerd migration reason=unexpected-path-type" >&2
+    exit 1
+fi
+
+if [ ! -L "$WB_DOCKER_CONTAINERD_DIR" ]; then
+    ln -s "$WB_DOCKER_PERSISTENT_CONTAINERD_DIR" "$WB_DOCKER_CONTAINERD_DIR"
+fi
+
+printf '%s\n' "$WB_DOCKER_PHASE:$WB_DOCKER_ACTION" \
+    > "$WB_DOCKER_STATE_DIR/lifecycle/last-invocation"

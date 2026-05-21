@@ -1,0 +1,63 @@
+#!/bin/sh
+
+set -eu
+
+case "${WB_DOCKER_PHASE}:${WB_DOCKER_ACTION}" in
+    postrm:remove|postrm:purge)
+        exit 0
+        ;;
+esac
+
+template="$WB_DOCKER_TEMPLATE_DIR/daemon.json"
+persistent_dir="$WB_DOCKER_PERSISTENT_ETC_DIR"
+target_dir="$WB_DOCKER_ETC_DOCKER_DIR"
+persistent_target="$WB_DOCKER_PERSISTENT_ETC_DIR/daemon.json"
+
+mkdir -p "$persistent_dir" "$(dirname "$target_dir")"
+
+migrate_root_config_dir() {
+    # Treat /etc/docker as the rootfs-facing view of persistent config. Existing
+    # files are migrated once, while conflicting files remain untouched.
+    for path in "$target_dir"/* "$target_dir"/.[!.]* "$target_dir"/..?*; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+
+        name=${path##*/}
+        dest="$persistent_dir/$name"
+
+        if [ -L "$path" ] && [ "$(readlink "$path")" = "$dest" ]; then
+            rm -f "$path"
+        elif [ ! -e "$dest" ]; then
+            mv "$path" "$dest"
+        elif [ -f "$path" ] && [ -f "$dest" ] && cmp -s "$path" "$dest"; then
+            rm -f "$path"
+        else
+            echo "wb-docker-reconcile keep $path reason=persistent-conflict" >&2
+        fi
+    done
+}
+
+if [ -L "$target_dir" ]; then
+    current_target=$(readlink "$target_dir")
+    if [ "$current_target" != "$persistent_dir" ]; then
+        rm -f "$target_dir"
+    fi
+elif [ -d "$target_dir" ]; then
+    migrate_root_config_dir
+    rmdir "$target_dir" 2>/dev/null || {
+        echo "wb-docker-reconcile failed docker config migration reason=rootfs-dir-not-empty" >&2
+        exit 1
+    }
+elif [ -e "$target_dir" ]; then
+    echo "wb-docker-reconcile failed docker config migration reason=unexpected-path-type" >&2
+    exit 1
+fi
+
+if [ -f "$template" ] && [ ! -e "$persistent_target" ]; then
+    # The packaged daemon.json is only a first-install default. Once persistent
+    # config exists, package upgrades must not replace operator changes.
+    install -m 0644 "$template" "$persistent_target"
+fi
+
+if [ ! -L "$target_dir" ]; then
+    ln -s "$persistent_dir" "$target_dir"
+fi

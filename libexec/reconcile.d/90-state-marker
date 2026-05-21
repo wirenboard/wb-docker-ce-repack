@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+case "${WB_DOCKER_PHASE}:${WB_DOCKER_ACTION}" in
+    postrm:remove|postrm:purge)
+        exit 0
+        ;;
+esac
+
+marker_dir="$WB_DOCKER_STATE_DIR/lifecycle"
+marker_file="$marker_dir/${WB_DOCKER_PHASE}-${WB_DOCKER_ACTION}.stamp"
+
+mkdir -p "$marker_dir"
+touch "$marker_file"
