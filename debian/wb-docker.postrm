@@ -4,11 +4,58 @@ set -eu
 
 helper="/usr/lib/wb-docker/wb-docker-reconcile"
 
+remove_if_symlink() {
+    path="$1"
+
+    if [ -L "$path" ]; then
+        rm -f "$path"
+    fi
+}
+
+remove_dir_if_empty() {
+    path="$1"
+
+    if [ -d "$path" ]; then
+        rmdir "$path" 2>/dev/null || true
+    fi
+}
+
+fallback_remove_cleanup() {
+    remove_if_symlink /etc/docker
+    remove_if_symlink /var/lib/containerd
+    remove_dir_if_empty /etc/docker
+    rm -rf /var/lib/wb-docker
+}
+
+fallback_purge_cleanup() {
+    echo "WARNING: apt purge wb-docker removes persistent Docker data" >&2
+    fallback_remove_cleanup
+    rm -rf \
+        /mnt/data/etc/docker \
+        /mnt/data/var/lib/containerd \
+        /mnt/data/docker
+    remove_dir_if_empty /mnt/data/etc
+    remove_dir_if_empty /mnt/data/var/lib
+    remove_dir_if_empty /mnt/data/var
+    remove_dir_if_empty /mnt/data
+}
+
 case "${1:-}" in
-    remove|purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    remove)
         if [ -x "$helper" ]; then
             "$helper" postrm "$1" "${2:-}"
+        else
+            fallback_remove_cleanup
         fi
+        ;;
+    purge)
+        if [ -x "$helper" ]; then
+            "$helper" postrm "$1" "${2:-}"
+        else
+            fallback_purge_cleanup
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;
     *)
         echo "postrm called with unknown argument \`$1'" >&2
