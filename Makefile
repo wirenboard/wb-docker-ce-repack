@@ -12,7 +12,7 @@ check:
 build: check
 	@if [ ! -r /etc/debian_version ]; then \
 		echo "make build requires a Debian build environment with debhelper-compat (= 13)." >&2; \
-		echo "On macOS, run make check locally and build the package inside Debian." >&2; \
+		echo "This is not the target platform for Debian package builds; run make check here and build the package inside Debian." >&2; \
 		exit 2; \
 	fi
 	dpkg-buildpackage -us -uc -b
