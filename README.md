@@ -15,7 +15,18 @@ kept out of this branch so the packaging shape can be reviewed separately.
 - `share/` Static templates installed under `/usr/share/wb-docker/`.
 - `configs/` `wb-configs` manifests installed under `/etc/wb-configs.d/`.
 
-## Local Build
+## Local Checks
+
+```bash
+make check
+```
+
+`make check` runs lightweight syntax checks that work outside a Debian build
+environment.
+
+## Debian Build
+
+Run the package build inside Debian with `debhelper-compat (= 13)` installed:
 
 ```bash
 make build
