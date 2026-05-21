@@ -126,15 +126,22 @@ enable_and_start_unit() {
         return 0
     fi
 
+    # enable is fast and synchronous; if it fails surface the error
+    # so postinst aborts and the failure is visible to the operator.
     "$systemctl_bin" enable "$unit"
 
+    # start/restart can be slow for docker.service on a controller; use
+    # --no-block so postinst does not stall the apt run waiting for the
+    # daemon. systemctl will only fail here if the request itself is
+    # rejected (e.g. unit masked). Real start failures must be observed
+    # via systemctl status/journal after the install.
     if "$systemctl_bin" is-active --quiet "$unit"; then
-        if ! "$systemctl_bin" restart "$unit"; then
-            log "wb-docker-reconcile skip ${unit} reason=restart-failed"
+        if ! "$systemctl_bin" restart --no-block "$unit"; then
+            log "wb-docker-reconcile warn ${unit} reason=restart-rejected"
         fi
     else
-        if ! "$systemctl_bin" start "$unit"; then
-            log "wb-docker-reconcile skip ${unit} reason=start-failed"
+        if ! "$systemctl_bin" start --no-block "$unit"; then
+            log "wb-docker-reconcile warn ${unit} reason=start-rejected"
         fi
     fi
 }

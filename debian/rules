@@ -1,8 +1,19 @@
 #!/usr/bin/make -f
 
+# wb-docker is an Architecture: all integration package.
+# It does not ship its own systemd units or init scripts.
+# Docker / containerd units are owned by their upstream packages;
+# enable and start happen from libexec/reconcile.d/30-service-network.
+# The overrides below keep debhelper from generating maintainer-script
+# fragments for units that this package does not own.
+
+export DH_VERBOSE = 1
+
 %:
 	dh $@
 
 override_dh_installsystemd:
 
 override_dh_installsystemduser:
+
+override_dh_installinit:

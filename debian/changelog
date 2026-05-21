@@ -1,4 +1,4 @@
-wb-docker (0.1.0) unstable; urgency=medium
+wb-docker (0.1.0) stable; urgency=medium
 
   * Initial package skeleton.
   * Add Docker reconcile hooks.
