@@ -1,62 +1,58 @@
 # wb-docker
 
-Downstream-репак Docker от Docker Inc. с WB-суффиксом версии.
+Downstream-репак Docker для контроллеров Wiren Board.
 
-Цель — отвязать версию Docker на контроллерах Wiren Board от Debian'овского
-`docker.io` (на bullseye это `20.10.5` 2021 года) и от cadence публикаций
-Docker Inc. WB сам решает, какую upstream-версию катить пользователям и
-когда. Имена пакетов сохраняются upstream-каноничные (`docker-ce`,
-`docker-ce-cli`, `containerd.io`, `docker-compose-plugin`); меняется только
-поле `Version` — к нему дописывается WB-суффикс `+wb1xx`. Пример:
-`5:29.5.2-1~debian.11~bullseye+wb100`.
+Команда `apt install docker-ce` на WB-контроллере ставит сразу четыре пакета
+(`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`)
+с WB-специфичной интеграцией, спрятанной внутрь `docker-ce`. Все настройки
+data-root, симлинков и iptables-backend делаются автоматически на установке.
 
-По правилам сравнения версий dpkg такой пакет сортируется выше как
-upstream-`.deb` без суффикса, так и Debian'овского `docker.io`, поэтому
-apt при штатном `apt install docker-ce` выбирает наш билд.
-
-> WB-специфичная интеграция (data-root на `/mnt/data`, симлинки) — отдельная
-> фича и приедет следующим PR. Этот PR даёт только перепакованный upstream
-> Docker — на контроллере поведение Docker'а такое же, как при установке
-> с `download.docker.com`.
+Версионирование: upstream-версия Docker Inc. с суффиксом `+wb1xx`
+(например, `5:29.5.2-1~debian.11~bullseye+wb100`).
 
 ## Структура репозитория
 
 ```
 repack/
-├── repack-docker-ce.sh     — скрипт сборки (download → version-bump → rebuild)
+├── repack-docker-ce.sh     — главный скрипт сборки
+├── postinst-snippet.sh     — WB-setup, инжектится в docker-ce DEBIAN/postinst
+├── overlay/                — файлы, инжектящиеся в дерево docker-ce.deb
+│   └── usr/share/wb-docker/daemon.json    — шаблон daemon.json
 ├── src/                    — кэш upstream .deb (gitignored)
 ├── out/                    — распакованные stage-каталоги (gitignored)
 └── artifacts/              — собранные .deb (gitignored)
 ```
 
-## Как собрать
+## Быстрый старт
 
-Требуется Linux с `wget`, `dpkg-deb`, `md5sum`, `tar` (на macOS:
-`brew install wget dpkg coreutils`).
+### Собрать пакеты на своей машине
+
+Требуется Linux с `wget`, `dpkg-deb`, `md5sum`, `tar`
+(или на macOS — `brew install wget dpkg coreutils`).
 
 ```bash
 # По умолчанию: bullseye / armhf
 bash repack/repack-docker-ce.sh
 
-# Явно задать архитектуру:
+# Или явно задать архитектуру:
 ARCH=arm64 bash repack/repack-docker-ce.sh
 ARCH=armhf bash repack/repack-docker-ce.sh
 ```
 
 Готовые `.deb` появятся в `repack/artifacts/`.
 
-## Как поставить на контроллер
+### Поставить на тестовый контроллер
 
-Скопировать четыре `.deb` (только нужной архитектуры) на контроллер:
+С локальной машины скопировать четыре `.deb` на контроллер:
 
 ```bash
-HOST=wirenboard-XXXXXXXX.local
+HOST=wirenboard-XXXXXXXX.local       # серийник контроллера, 8 символов
 ARCH=arm64                            # arm64 для wb8, armhf для wb6/wb7
 
 scp repack/artifacts/*_${ARCH}.deb root@${HOST}:/tmp/
 ```
 
-На контроллере поднять локальный apt-репозиторий и поставить одной командой:
+На контроллере поднять локальный apt-репозиторий и поставить:
 
 ```bash
 mkdir -p /var/local/wb-repo
@@ -69,19 +65,44 @@ deb [trusted=yes] file:/var/local/wb-repo ./
 EOF
 
 apt-get update
-apt-cache policy docker-ce            # candidate должен быть +wb1xx
-apt-get install -y docker-ce          # подтянет cli, containerd, compose
+apt-get install -y docker-ce          # одной командой все четыре пакета
+```
+
+Проверить, что всё поднялось:
+
+```bash
+docker info 2>&1 | grep 'Docker Root Dir'      # → /mnt/data/docker/lib
+docker compose version
+docker run --rm hello-world
+```
+
+### Удалить
+
+Штатное удаление (с сохранением пользовательских данных на `/mnt/data`):
+
+```bash
+apt purge docker-ce && apt autoremove --purge
+```
+
+Полное удаление вместе с образами и контейнерами:
+
+```bash
+apt purge docker-ce && apt autoremove --purge
+rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
+       /mnt/data/var/lib/containerd
 ```
 
 ## Полная документация
 
-Расширенный документ — версионная конвенция `+wb1xx`, мотивация, история
-решений — лежит в Google Drive:
+Расширенный документ по архитектуре, всем edge-cases и плану работ лежит
+в Google Drive:
 
 [Перепаковка Docker для Wiren Board](https://docs.google.com/document/d/1SS1GXR9tSsovYjIU3ILNvEqS7ZJKOOznjiLtqoGcz34/edit?tab=t.0)
 
+
 ## Ссылки
 
+- Документация по WB Docker: https://wiki.wirenboard.com/wiki/Docker
+- Community installer: https://github.com/wirenboard/wb-community/blob/main/scripts/docker-install/wb-docker-manager.sh
 - WB apt repo: https://deb.wirenboard.com
 - WB Jenkins: https://jenkins.wirenboard.com
-- Docker upstream debs: https://download.docker.com/linux/debian/
