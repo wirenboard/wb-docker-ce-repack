@@ -7,3 +7,6 @@
 
 # Local working docs — not part of the published package
 doc/
+
+# Local test artifacts and runner scripts — not part of the published package
+artifacts/
