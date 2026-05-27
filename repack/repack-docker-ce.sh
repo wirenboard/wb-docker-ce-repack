@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 #
-# Repack upstream Docker .deb packages with a Wiren Board downstream version
-# suffix.
+# Build the WB Docker package set:
+#   - docker-ce is repacked with a Wiren Board downstream Version suffix
+#     (`+wb1xx`); future iterations of this script will also inject the WB
+#     overlay and postinst snippet into this package.
+#   - docker-ce-cli, containerd.io, docker-compose-plugin are mirrored as-is
+#     from download.docker.com into our artifacts/ directory. They keep their
+#     upstream filenames, upstream Version, and byte-identical contents — they
+#     ship next to docker-ce in the WB apt repo only so that apt can resolve
+#     docker-ce's strict `Depends:` from a single source.
 #
-# Scope:
-#   1. Download official docker-ce, docker-ce-cli, containerd.io,
-#      docker-compose-plugin from download.docker.com.
-#   2. Bump Version in DEBIAN/control to append the WB suffix (every package).
-#   3. Repack with dpkg-deb --root-owner-group.
+# Why not bump Version on all four: it would buy nothing (we don't modify
+# their contents) while making WB responsible for re-running the repack on
+# every upstream bump of those three packages.
 #
 # Goal: let WB control the Docker version delivered to controllers
 # independently of Debian's stale `docker.io` snapshot, and independently of
-# Docker Inc.'s upstream release cadence. The packages keep canonical
-# upstream names and contents — only the Version field gains the WB
-# `+wb1xx` marker so apt prefers our build over both Debian and upstream.
+# Docker Inc.'s upstream release cadence. The WB suffix on docker-ce sorts
+# above both Debian's docker.io and Docker Inc.'s upstream, so apt prefers
+# our docker-ce; the dependency chain then pins the matching upstream
+# versions of cli/containerd/compose.
 #
 # Requires: wget, dpkg-deb, md5sum, tar (all present on macOS via Homebrew or
 # coreutils, and stock on Debian).
@@ -36,16 +42,17 @@ if [[ -z "${DEBIAN_NUM:-}" ]]; then
     esac
 fi
 ARCH="${ARCH:-armhf}"             # armhf | arm64
-WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker. Leading "+" keeps
-                                  # the suffix inside debian-revision
+WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
+                                  # Leading "+" keeps the suffix inside
+                                  # debian-revision
                                   # (1~debian.11~bullseye+wb100), leaving the
                                   # upstream-version field untouched — the
                                   # canonical downstream convention. The
                                   # "1xx" numbering is a counter for WB-side
                                   # iterations on top of the same upstream
-                                  # Docker version: +wb100 first ship,
-                                  # +wb101 next overlay change, etc. Reset
-                                  # to +wb100 when the upstream version is
+                                  # docker-ce: +wb100 first ship, +wb101
+                                  # next overlay change, etc. Reset to
+                                  # +wb100 when the upstream version is
                                   # bumped. Reserved ranges +wb2xx and
                                   # +wb9xx left for future experimental and
                                   # hotfix streams.
@@ -100,30 +107,42 @@ patch_version() {
     grep -q "^${new_line}$" "${control}"
 }
 
-# --- 3. Repack ---------------------------------------------------------------
+# --- 3. Build ----------------------------------------------------------------
 
-repack_one() {
-    local name="$1" upstream="$2"
-    local src="${SRC_DIR}/${name}_${upstream}_${ARCH}.deb"
-    local stage="${OUT_DIR}/${name}"
+# docker-ce: unpack, patch Version, repack with the WB suffix.
+repack_docker_ce() {
+    local upstream="$1"
+    local src="${SRC_DIR}/docker-ce_${upstream}_${ARCH}.deb"
+    local stage="${OUT_DIR}/docker-ce"
 
     rm -rf "${stage}"
     dpkg-deb -R "${src}" "${stage}"
 
     patch_version "${stage}/DEBIAN/control" "${upstream}" \
-        || { echo "[fail] Version patch failed for ${name}"; exit 1; }
+        || { echo "[fail] Version patch failed for docker-ce"; exit 1; }
 
     # --root-owner-group: build env runs as the user; without this flag the
     # tarball would carry uid=501 and dpkg --install would refuse it.
     dpkg-deb --root-owner-group -b "${stage}" "${ART_DIR}/" >/dev/null
 
-    echo "[ok  ] ${name}${WB_SUFFIX}"
+    echo "[ok  ] docker-ce${WB_SUFFIX}"
 }
 
-repack_one docker-ce              "${DOCKER_CE_UPSTREAM}"
-repack_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
-repack_one containerd.io          "${CONTAINERD_UPSTREAM}"
-repack_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
+# Mirror an upstream .deb as-is: same filename, same Version, identical bytes.
+# Lives in our apt repo only to satisfy docker-ce's strict Depends from a
+# single source.
+mirror_one() {
+    local name="$1" upstream="$2"
+    local fname="${name}_${upstream}_${ARCH}.deb"
+
+    cp -f "${SRC_DIR}/${fname}" "${ART_DIR}/${fname}"
+    echo "[mirr] ${fname}"
+}
+
+repack_docker_ce "${DOCKER_CE_UPSTREAM}"
+mirror_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
+mirror_one containerd.io          "${CONTAINERD_UPSTREAM}"
+mirror_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
 
 echo
 echo "Artefacts:"
