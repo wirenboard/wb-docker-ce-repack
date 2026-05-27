@@ -41,8 +41,7 @@ repack/
 
 ## Как собрать
 
-Требуется Linux с `wget`, `dpkg-deb`, `md5sum`, `tar` (на macOS:
-`brew install wget dpkg coreutils`).
+Требуется Linux с `wget` и `dpkg-deb` (на macOS — `brew install wget dpkg`).
 
 ```bash
 # По умолчанию: bullseye / armhf
