@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 #
-# Repack Docker upstream .deb packages with a Wiren Board version suffix and
-# Wiren Board integration overlay.
+# Build the WB Docker package set.
 #
-# Iteration 2 scope:
+# Scope:
 #   1. Download official docker-ce, docker-ce-cli, containerd.io,
 #      docker-compose-plugin from download.docker.com.
-#   2. Bump Version in DEBIAN/control to add the WB suffix (every package).
-#   3. For docker-ce only:
+#   2. For docker-ce ONLY:
 #        a. inject the WB overlay tree from repack/overlay/ into the .deb's
 #           data archive (currently: a daemon.json template), regenerate
 #           DEBIAN/md5sums for new files;
@@ -17,8 +15,14 @@
 #           BEFORE debhelper's auto-generated start of docker.service;
 #        c. append `docker-compose-plugin` to Depends — so a single
 #           `apt install docker-ce` against our local apt-repo brings in the
-#           compose plugin alongside the daemon.
-#   4. Repack everything with dpkg-deb --root-owner-group.
+#           compose plugin alongside the daemon;
+#        d. bump Version in DEBIAN/control with the WB suffix;
+#        e. repack with dpkg-deb --root-owner-group.
+#   3. docker-ce-cli, containerd.io and docker-compose-plugin are mirrored
+#      as-is from src/ into artifacts/ — same upstream filename, same Version,
+#      byte-identical contents. They live next to docker-ce in the WB apt
+#      repo only so apt can resolve docker-ce's strict Depends from a single
+#      source.
 #
 # The overlay (see repack/overlay/) ships:
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
@@ -45,16 +49,17 @@ if [[ -z "${DEBIAN_NUM:-}" ]]; then
     esac
 fi
 ARCH="${ARCH:-armhf}"             # armhf | arm64
-WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker. Leading "+" keeps
-                                  # the suffix inside debian-revision
+WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
+                                  # Leading "+" keeps the suffix inside
+                                  # debian-revision
                                   # (1~debian.11~bullseye+wb100), leaving the
                                   # upstream-version field untouched — the
                                   # canonical downstream convention. The
                                   # "1xx" numbering is a counter for WB-side
                                   # iterations on top of the same upstream
-                                  # Docker version: +wb100 first ship,
-                                  # +wb101 next overlay change, etc. Reset
-                                  # to +wb100 when the upstream version is
+                                  # docker-ce: +wb100 first ship, +wb101
+                                  # next overlay change, etc. Reset to
+                                  # +wb100 when the upstream version is
                                   # bumped. Reserved ranges +wb2xx and
                                   # +wb9xx left for future experimental and
                                   # hotfix streams.
@@ -235,42 +240,49 @@ append_depends() {
     grep -q "^Depends:.*${new_dep}" "${control}"
 }
 
-# --- 3. Repack ---------------------------------------------------------------
+# --- 3. Build ----------------------------------------------------------------
 
-repack_one() {
-    local name="$1" upstream="$2"
-    local src="${SRC_DIR}/${name}_${upstream}_${ARCH}.deb"
-    local stage="${OUT_DIR}/${name}"
+# docker-ce: unpack, layer the WB overlay tree, inject the WB postinst snippet,
+# append the docker-compose-plugin Depends, bump Version, repack.
+repack_docker_ce() {
+    local upstream="$1"
+    local src="${SRC_DIR}/docker-ce_${upstream}_${ARCH}.deb"
+    local stage="${OUT_DIR}/docker-ce"
 
     rm -rf "${stage}"
     dpkg-deb -R "${src}" "${stage}"
 
+    inject_overlay "${stage}" "${OVERLAY_DIR}"
+    inject_postinst "${stage}" "${POSTINST_SNIPPET}" \
+        || { echo "[fail] postinst injection failed"; exit 1; }
+    append_depends "${stage}/DEBIAN/control" \
+        "docker-compose-plugin (>= ${COMPOSE_VERSION})" \
+        || { echo "[fail] Depends patch failed"; exit 1; }
     patch_version "${stage}/DEBIAN/control" "${upstream}" \
-        || { echo "[fail] Version patch failed for ${name}"; exit 1; }
-
-    # docker-ce is the only package that carries the WB overlay, the WB
-    # postinst snippet and the extra Depends on docker-compose-plugin —
-    # everything else is a clean version-suffix repack.
-    if [[ "${name}" == "docker-ce" ]]; then
-        inject_overlay "${stage}" "${OVERLAY_DIR}"
-        inject_postinst "${stage}" "${POSTINST_SNIPPET}" \
-            || { echo "[fail] postinst injection failed"; exit 1; }
-        append_depends "${stage}/DEBIAN/control" \
-            "docker-compose-plugin (>= ${COMPOSE_VERSION})" \
-            || { echo "[fail] Depends patch failed"; exit 1; }
-    fi
+        || { echo "[fail] Version patch failed for docker-ce"; exit 1; }
 
     # --root-owner-group: build env runs as the user; without this flag the
     # tarball would carry uid=501 and dpkg --install would refuse it.
     dpkg-deb --root-owner-group -b "${stage}" "${ART_DIR}/" >/dev/null
 
-    echo "[ok  ] ${name}${WB_SUFFIX}"
+    echo "[ok  ] docker-ce${WB_SUFFIX}"
 }
 
-repack_one docker-ce              "${DOCKER_CE_UPSTREAM}"
-repack_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
-repack_one containerd.io          "${CONTAINERD_UPSTREAM}"
-repack_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
+# Mirror an upstream .deb as-is: same filename, same Version, identical bytes.
+# Lives in our apt repo only to satisfy docker-ce's strict Depends from a
+# single source.
+mirror_one() {
+    local name="$1" upstream="$2"
+    local fname="${name}_${upstream}_${ARCH}.deb"
+
+    cp -f "${SRC_DIR}/${fname}" "${ART_DIR}/${fname}"
+    echo "[mirr] ${fname}"
+}
+
+repack_docker_ce "${DOCKER_CE_UPSTREAM}"
+mirror_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
+mirror_one containerd.io          "${CONTAINERD_UPSTREAM}"
+mirror_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
 
 echo
 echo "Artefacts:"
