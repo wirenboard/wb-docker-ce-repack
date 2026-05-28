@@ -91,21 +91,25 @@ fetch_one() {
     fi
 }
 
-# Patch DEBIAN/control: Version: <upstream> -> Version: <upstream><WB_SUFFIX>.
-# docker-ce ships with epoch `5:` in its Version field; the fallback branch
-# without the epoch is a forward-compat guard — if upstream ever drops the
-# epoch the final `grep -q` assertion below will catch a silent change of
-# format either way.
+# Patch DEBIAN/control: Version: 5:<upstream> -> Version: 5:<upstream><WB_SUFFIX>.
+#
+# docker-ce ships with a Debian epoch `5:` since 2017, when Docker Inc.
+# renumbered their releases from 1.13.x to a year-based scheme (17.03.x and
+# onward). Without the epoch dpkg would compare "17.03" against "1.13"
+# character-by-character and decide the new release is older; the `5:`
+# prefix overrides that. The epoch has been stable for the entire 17.x/
+# 18.x/19.x/20.x/24.x/26.x/29.x lifetime, so we anchor on it explicitly.
+# If upstream ever drops or bumps it, the up-front `grep -q` fails loudly
+# with a clear "format changed" message instead of silently writing
+# nothing.
 patch_version() {
     local control="$1" upstream="$2"
-    local old_line new_line
+    local old_line="Version: 5:${upstream}"
+    local new_line="Version: 5:${upstream}${WB_SUFFIX}"
 
-    if grep -q "^Version: 5:${upstream}$" "${control}"; then
-        old_line="Version: 5:${upstream}"
-        new_line="Version: 5:${upstream}${WB_SUFFIX}"
-    else
-        old_line="Version: ${upstream}"
-        new_line="Version: ${upstream}${WB_SUFFIX}"
+    if ! grep -q "^${old_line}$" "${control}"; then
+        echo "[fail    ] expected '${old_line}' in ${control}; upstream Version format changed?" >&2
+        return 1
     fi
 
     echo "[version ] ${new_line#Version: }"
