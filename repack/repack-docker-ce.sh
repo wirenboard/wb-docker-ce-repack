@@ -41,6 +41,15 @@ case "${SUITE}" in
     *) echo "[fail] Unknown SUITE: ${SUITE}" >&2; exit 1 ;;
 esac
 ARCH="${ARCH:-armhf}"             # armhf | arm64
+case "${ARCH}" in
+    armhf|arm64) ;;
+    *) echo "[fail] Unknown ARCH: ${ARCH} (expected armhf|arm64)" >&2; exit 1 ;;
+esac
+
+# WB_SUFFIX is interpolated into both filenames and DEBIAN/control's
+# Version: line. Restrict it up front so a typo (e.g. "wb100" without the
+# leading "+") fails fast with a clear message instead of producing a
+# broken Version string.
 WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
                                   # Leading "+" keeps the suffix inside
                                   # debian-revision
@@ -55,6 +64,11 @@ WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
                                   # bumped. Reserved ranges +wb2xx and
                                   # +wb9xx left for future experimental and
                                   # hotfix streams.
+WB_SUFFIX_RE='^\+wb[0-9]+$'
+if ! [[ "${WB_SUFFIX}" =~ ${WB_SUFFIX_RE} ]]; then
+    echo "[fail] WB_SUFFIX must match '+wb<digits>' (got: '${WB_SUFFIX}')" >&2
+    exit 1
+fi
 
 # --- Layout ------------------------------------------------------------------
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,15 +121,23 @@ patch_version() {
     local old_line="Version: 5:${upstream}"
     local new_line="Version: 5:${upstream}${WB_SUFFIX}"
 
-    if ! grep -q "^${old_line}$" "${control}"; then
+    # `grep -Fqx`: fixed-string, whole-line match. Without -F the version
+    # would be treated as a regex and dots would match any character,
+    # turning the "format changed?" guard into a loose check.
+    if ! grep -Fqx -- "${old_line}" "${control}"; then
         echo "[fail    ] expected '${old_line}' in ${control}; upstream Version format changed?" >&2
         return 1
     fi
 
     echo "[version ] ${new_line#Version: }"
-    sed -i.bak "s|^${old_line}$|${new_line}|" "${control}"
+    # Escape regex metachars in the sed pattern so a literal dot in the
+    # version doesn't match arbitrary characters. The replacement side
+    # stays literal because our version strings don't contain `&`, `\` or
+    # the chosen sed delimiter `|`.
+    local pattern="${old_line//./\\.}"
+    sed -i.bak "s|^${pattern}\$|${new_line}|" "${control}"
     rm -f "${control}.bak"
-    grep -q "^${new_line}$" "${control}"
+    grep -Fqx -- "${new_line}" "${control}"
 }
 
 # docker-ce: unpack, patch Version, repack with the WB suffix.
