@@ -49,42 +49,6 @@ if [ "$1" = "configure" ]; then
 
     mkdir -p "$PERSISTENT_ETC_DOCKER" "$PERSISTENT_CONTAINERD" "$PERSISTENT_DOCKER_DATA"
 
-    # Migrate data laid down by the legacy community installer
-    # (https://github.com/wirenboard/wb-community/blob/main/scripts/docker-install/wb-docker-manager.sh):
-    # it kept Docker data-root at /mnt/data/.docker. If that directory still
-    # exists and our target is empty, move it across. Also patch any pre-existing
-    # daemon.json that still points data-root at the legacy location.
-    COMMUNITY_LEGACY_DOCKER_DATA="${PERSISTENT_ROOT}/.docker"
-    if [ -d "$COMMUNITY_LEGACY_DOCKER_DATA" ] && [ ! -L "$COMMUNITY_LEGACY_DOCKER_DATA" ]; then
-        if [ -f "$DAEMON_JSON_TARGET" ] && \
-           grep -q '"data-root".*"/mnt/data/\.docker"' "$DAEMON_JSON_TARGET"; then
-            sed -i 's|"data-root"[[:space:]]*:[[:space:]]*"/mnt/data/\.docker"|"data-root": "/mnt/data/docker/lib"|' \
-                "$DAEMON_JSON_TARGET"
-            log "patched daemon.json data-root: ${COMMUNITY_LEGACY_DOCKER_DATA} -> ${PERSISTENT_DOCKER_DATA}"
-        fi
-
-        # shellcheck disable=SC2012
-        if [ -z "$(ls -A "$PERSISTENT_DOCKER_DATA" 2>/dev/null || true)" ]; then
-            log "migrating ${COMMUNITY_LEGACY_DOCKER_DATA} -> ${PERSISTENT_DOCKER_DATA}"
-            for entry in "$COMMUNITY_LEGACY_DOCKER_DATA"/.* "$COMMUNITY_LEGACY_DOCKER_DATA"/*; do
-                case "$entry" in
-                    "$COMMUNITY_LEGACY_DOCKER_DATA"/.|"$COMMUNITY_LEGACY_DOCKER_DATA"/..) continue ;;
-                    "$COMMUNITY_LEGACY_DOCKER_DATA"/.*\*|"$COMMUNITY_LEGACY_DOCKER_DATA"/\*) continue ;;
-                esac
-                base=$(basename "$entry")
-                if [ -e "$PERSISTENT_DOCKER_DATA/$base" ]; then
-                    log "  skip ${base}: already present in ${PERSISTENT_DOCKER_DATA}"
-                    continue
-                fi
-                mv -- "$entry" "$PERSISTENT_DOCKER_DATA/"
-            done
-            rmdir "$COMMUNITY_LEGACY_DOCKER_DATA" 2>/dev/null || \
-                log "  ${COMMUNITY_LEGACY_DOCKER_DATA} not empty after migration — left in place"
-        else
-            log "${PERSISTENT_DOCKER_DATA} already has content — leaving ${COMMUNITY_LEGACY_DOCKER_DATA} untouched"
-        fi
-    fi
-
     # Replace rootfs /etc/docker and /var/lib/containerd with symlinks into
     # /mnt/data. docker-ce.deb unpacks /etc/docker (and sometimes
     # /var/lib/containerd is created by containerd.io.deb) — migrate any content
@@ -130,6 +94,50 @@ if [ "$1" = "configure" ]; then
 
     migrate_rootfs_to_persistent "$ROOTFS_ETC_DOCKER" "$PERSISTENT_ETC_DOCKER" || true
     migrate_rootfs_to_persistent "$ROOTFS_CONTAINERD" "$PERSISTENT_CONTAINERD" || true
+
+    # Migrate data laid down by the legacy community installer
+    # (https://github.com/wirenboard/wb-community/blob/main/scripts/docker-install/wb-docker-manager.sh):
+    # it kept Docker data-root at /mnt/data/.docker. If that directory still
+    # exists and our target is empty, move it across. Also patch any daemon.json
+    # that still points data-root at the legacy location.
+    #
+    # Runs AFTER the rootfs symlink migration above, on purpose: a community
+    # daemon.json starts life at /etc/docker/daemon.json and only lands at
+    # $DAEMON_JSON_TARGET (/mnt/data/etc/docker/daemon.json) once /etc/docker has
+    # been migrated into /mnt/data. Patching it before that migration was a
+    # silent no-op — the target did not exist yet — which left dockerd reading a
+    # /mnt/data/.docker we had just emptied. Keep the data move next to the
+    # daemon.json patch so the on-disk path and the configured path always agree.
+    COMMUNITY_LEGACY_DOCKER_DATA="${PERSISTENT_ROOT}/.docker"
+    if [ -d "$COMMUNITY_LEGACY_DOCKER_DATA" ] && [ ! -L "$COMMUNITY_LEGACY_DOCKER_DATA" ]; then
+        if [ -f "$DAEMON_JSON_TARGET" ] && \
+           grep -q '"data-root".*"/mnt/data/\.docker"' "$DAEMON_JSON_TARGET"; then
+            sed -i 's|"data-root"[[:space:]]*:[[:space:]]*"/mnt/data/\.docker"|"data-root": "/mnt/data/docker/lib"|' \
+                "$DAEMON_JSON_TARGET"
+            log "patched daemon.json data-root: ${COMMUNITY_LEGACY_DOCKER_DATA} -> ${PERSISTENT_DOCKER_DATA}"
+        fi
+
+        # shellcheck disable=SC2012
+        if [ -z "$(ls -A "$PERSISTENT_DOCKER_DATA" 2>/dev/null || true)" ]; then
+            log "migrating ${COMMUNITY_LEGACY_DOCKER_DATA} -> ${PERSISTENT_DOCKER_DATA}"
+            for entry in "$COMMUNITY_LEGACY_DOCKER_DATA"/.* "$COMMUNITY_LEGACY_DOCKER_DATA"/*; do
+                case "$entry" in
+                    "$COMMUNITY_LEGACY_DOCKER_DATA"/.|"$COMMUNITY_LEGACY_DOCKER_DATA"/..) continue ;;
+                    "$COMMUNITY_LEGACY_DOCKER_DATA"/.*\*|"$COMMUNITY_LEGACY_DOCKER_DATA"/\*) continue ;;
+                esac
+                base=$(basename "$entry")
+                if [ -e "$PERSISTENT_DOCKER_DATA/$base" ]; then
+                    log "  skip ${base}: already present in ${PERSISTENT_DOCKER_DATA}"
+                    continue
+                fi
+                mv -- "$entry" "$PERSISTENT_DOCKER_DATA/"
+            done
+            rmdir "$COMMUNITY_LEGACY_DOCKER_DATA" 2>/dev/null || \
+                log "  ${COMMUNITY_LEGACY_DOCKER_DATA} not empty after migration — left in place"
+        else
+            log "${PERSISTENT_DOCKER_DATA} already has content — leaving ${COMMUNITY_LEGACY_DOCKER_DATA} untouched"
+        fi
+    fi
 
     # Seed daemon.json from the WB template only if the user does not already
     # have one. Never overwrite.
