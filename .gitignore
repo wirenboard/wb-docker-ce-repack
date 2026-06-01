@@ -5,12 +5,6 @@
 # JetBrains IDEs
 .idea/
 
-# doc/ holds local working notes by default — but a couple of files are
-# explicit project documentation and DO get published with the repo.
-# Whitelist them; everything else under doc/ stays local.
-doc/*
-!doc/wb-docker-rationale.md
-
 # Build inputs and outputs under repack/ — not part of the published package
 repack/src/
 repack/out/
