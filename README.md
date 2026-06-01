@@ -109,8 +109,6 @@ rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
 
 ## Полная документация
 
-- Архитектура и обоснования решений — в репо:
-  [`doc/wb-docker-rationale.md`](doc/wb-docker-rationale.md).
 - Краткая операционная инструкция по перепаковке новой версии —
   [Перепаковка Docker для Wiren Board](https://docs.google.com/document/d/1SS1GXR9tSsovYjIU3ILNvEqS7ZJKOOznjiLtqoGcz34/edit?tab=t.0)
   (Google Drive).
