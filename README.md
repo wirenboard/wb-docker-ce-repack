@@ -112,6 +112,9 @@ rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
 - Краткая операционная инструкция по перепаковке новой версии —
   [Перепаковка Docker для Wiren Board](https://docs.google.com/document/d/1SS1GXR9tSsovYjIU3ILNvEqS7ZJKOOznjiLtqoGcz34/edit?tab=t.0)
   (Google Drive).
+- Архитектура и обоснования решений —
+  [Архитектура и решения по перепаковке Docker](https://docs.google.com/document/d/1euyEGmuH-pTFkhabeNXJLJFl5f-1zrSwjaRvOHXki2g/edit)
+  (Google Drive).
 
 
 ## Ссылки
