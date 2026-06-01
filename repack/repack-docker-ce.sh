@@ -1,27 +1,35 @@
 #!/usr/bin/env bash
 #
-# Build the WB Docker package set:
-#   - docker-ce is repacked with a Wiren Board downstream Version suffix
-#     (`+wb1xx`); future iterations of this script will also inject the WB
-#     overlay and postinst snippet into this package.
-#   - docker-ce-cli, containerd.io, docker-compose-plugin are mirrored as-is
-#     from download.docker.com into our artifacts/ directory. They keep their
-#     upstream filenames, upstream Version, and byte-identical contents — they
-#     ship next to docker-ce in the WB apt repo only so that apt can resolve
-#     docker-ce's strict `Depends:` from a single source.
+# Build the WB Docker package set.
 #
-# Why not bump Version on all four: it would buy nothing (we don't modify
-# their contents) while making WB responsible for re-running the repack on
-# every upstream bump of those three packages.
+# Scope:
+#   1. Download official docker-ce, docker-ce-cli, containerd.io,
+#      docker-compose-plugin from download.docker.com.
+#   2. For docker-ce ONLY:
+#        a. inject the WB overlay tree from repack/overlay/ into the .deb's
+#           data archive (currently: a daemon.json template), regenerate
+#           DEBIAN/md5sums for new files;
+#        b. inject the WB setup snippet (repack/postinst-snippet.sh) into the
+#           existing docker-ce DEBIAN/postinst, so `apt install docker-ce`
+#           seeds /mnt/data layout, symlinks, daemon.json and iptables-legacy
+#           BEFORE debhelper's auto-generated start of docker.service;
+#        c. append `docker-compose-plugin` to Depends — so a single
+#           `apt install docker-ce` against our local apt-repo brings in the
+#           compose plugin alongside the daemon;
+#        d. bump Version in DEBIAN/control with the WB suffix;
+#        e. repack with dpkg-deb --root-owner-group.
+#   3. docker-ce-cli, containerd.io and docker-compose-plugin are mirrored
+#      as-is from src/ into artifacts/ — same upstream filename, same Version,
+#      byte-identical contents. They live next to docker-ce in the WB apt
+#      repo only so apt can resolve docker-ce's strict Depends from a single
+#      source.
 #
-# Goal: let WB control the Docker version delivered to controllers
-# independently of Debian's stale `docker.io` snapshot, and independently of
-# Docker Inc.'s upstream release cadence. The WB suffix on docker-ce sorts
-# above both Debian's docker.io and Docker Inc.'s upstream, so apt prefers
-# our docker-ce; the dependency chain then pins the matching upstream
-# versions of cli/containerd/compose.
+# The overlay (see repack/overlay/) ships:
+#   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
+#                                        /mnt/data/etc/docker/ on install.
 #
-# Requires: wget, dpkg-deb (on macOS: `brew install wget dpkg`).
+# Requires: wget, dpkg-deb, md5sum (or gmd5sum from coreutils on macOS), tar.
+# On macOS: `brew install wget dpkg coreutils`; all stock on Debian.
 # Run from repo root: bash repack/repack-docker-ce.sh
 
 set -euo pipefail
@@ -75,6 +83,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${HERE}/src"
 OUT_DIR="${HERE}/out"
 ART_DIR="${HERE}/artifacts"
+OVERLAY_DIR="${HERE}/overlay"
+POSTINST_SNIPPET="${HERE}/postinst-snippet.sh"
+
+# Resolve the md5 tool. GNU coreutils ships `md5sum` on Linux; on macOS
+# `brew install coreutils` exposes it as `gmd5sum` (the unprefixed name lives
+# under libexec/gnubin, not on PATH by default). Accept either so the macOS
+# quick start works without extra PATH surgery.
+MD5SUM="$(command -v md5sum || command -v gmd5sum || true)"
+if [[ -z "${MD5SUM}" ]]; then
+    echo "[fail] need md5sum or gmd5sum on PATH (macOS: 'brew install coreutils' provides gmd5sum)" >&2
+    exit 1
+fi
 
 DOCKER_CE_UPSTREAM="${DOCKER_CE_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
 CONTAINERD_UPSTREAM="${CONTAINERD_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
@@ -113,7 +133,7 @@ fetch_one() {
 # character-by-character and decide the new release is older; the `5:`
 # prefix overrides that. The epoch has been stable for the entire 17.x/
 # 18.x/19.x/20.x/24.x/26.x/29.x lifetime, so we anchor on it explicitly.
-# If upstream ever drops or bumps it, the up-front `grep -q` fails loudly
+# If upstream ever drops or bumps it, the up-front `grep -Fqx` fails loudly
 # with a clear "format changed" message instead of silently writing
 # nothing.
 patch_version() {
@@ -140,7 +160,132 @@ patch_version() {
     grep -Fqx -- "${new_line}" "${control}"
 }
 
-# docker-ce: unpack, patch Version, repack with the WB suffix.
+# Inject the WB overlay tree into the unpacked docker-ce stage:
+#   - tar | tar to preserve file modes
+#   - append md5sums for newly added files
+#   - re-sort DEBIAN/md5sums (dpkg does not require sort, but it keeps the
+#     file diffable against upstream).
+inject_overlay() {
+    local stage="$1" overlay="$2"
+
+    (cd "${overlay}" && tar cf - .) | (cd "${stage}" && tar xpf -)
+
+    local md5sums="${stage}/DEBIAN/md5sums"
+    (
+        cd "${overlay}"
+        find . -type f -print \
+            | sed 's|^\./||' \
+            | sort \
+            | while read -r path; do
+                  ( cd "${stage}" && "${MD5SUM}" "${path}" )
+              done
+    ) >> "${md5sums}"
+
+    sort -k2 -o "${md5sums}" "${md5sums}"
+}
+
+# Inject the WB setup snippet into the docker-ce DEBIAN/postinst. The snippet
+# (repack/postinst-snippet.sh) sets up /mnt/data layout, symlinks, daemon.json
+# and iptables-legacy on install. We must run it BEFORE debhelper's
+# auto-generated `deb-systemd-invoke start docker.service` block at the tail of
+# postinst, so the daemon starts already pointing at /mnt/data.
+#
+# Strategy: read the upstream postinst, find the first `set -e` line, and
+# inline the snippet body (everything after its own shebang) right after it,
+# wrapped in clear BEGIN/END markers. The snippet itself is guarded by
+# `if [ "$1" = "configure" ]; then ... fi`, so it is a no-op on rollback paths.
+# Asserts a `set -e` line exists — if a future upstream postinst drops it, the
+# function fails loudly instead of silently appending nowhere.
+inject_postinst() {
+    local stage="$1" snippet="$2"
+    local postinst="${stage}/DEBIAN/postinst"
+
+    if [[ ! -f "${snippet}" ]]; then
+        echo "[fail] postinst snippet missing at ${snippet}"
+        return 1
+    fi
+
+    # Strip the snippet's own shebang line into a temp file — the upstream
+    # postinst already has one. Keep everything else verbatim.
+    local snippet_body
+    snippet_body=$(mktemp)
+    sed -e '1{/^#!/d;}' "${snippet}" > "${snippet_body}"
+
+    if [[ ! -f "${postinst}" ]]; then
+        # Upstream docker-ce ships a postinst, but be defensive in case a
+        # future version stops doing so — synthesize a minimal one.
+        {
+            echo '#!/bin/sh'
+            echo 'set -e'
+            echo
+            echo '# --- BEGIN wb-docker setup ---'
+            cat "${snippet_body}"
+            echo '# --- END wb-docker setup ---'
+            echo
+            echo 'exit 0'
+        } > "${postinst}"
+        chmod 0755 "${postinst}"
+        rm -f "${snippet_body}"
+        return 0
+    fi
+
+    if ! grep -q '^set -e' "${postinst}"; then
+        echo "[fail] no 'set -e' line in ${postinst}; refusing to inject blindly"
+        rm -f "${snippet_body}"
+        return 1
+    fi
+
+    # Inject the snippet right after the FIRST line matching `^set -e`. We
+    # build the new file by streaming lines through a small awk that, on hit,
+    # prints the line, then cats the snippet via getline. The snippet path is
+    # passed in an awk variable so multi-line snippet content stays in a file.
+    local tmp
+    tmp=$(mktemp)
+    awk -v body_file="${snippet_body}" '
+        BEGIN { injected = 0 }
+        {
+            print
+            if (!injected && $0 ~ /^set -e/) {
+                print ""
+                print "# --- BEGIN wb-docker setup ---"
+                while ((getline line < body_file) > 0) print line
+                close(body_file)
+                print "# --- END wb-docker setup ---"
+                injected = 1
+            }
+        }
+        END {
+            if (!injected) exit 1
+        }
+    ' "${postinst}" > "${tmp}" || {
+        echo "[fail] failed to locate '^set -e' insertion point in ${postinst}"
+        rm -f "${tmp}" "${snippet_body}"
+        return 1
+    }
+    mv "${tmp}" "${postinst}"
+    chmod 0755 "${postinst}"
+    rm -f "${snippet_body}"
+}
+
+# Append a new dependency to the Depends: line in DEBIAN/control. Asserts the
+# field is single-line (upstream docker-ce keeps it that way; if a future
+# upstream rewraps it onto multiple lines, this assertion catches the change
+# instead of silently corrupting the file).
+append_depends() {
+    local control="$1" new_dep="$2"
+    local depends_lines
+    depends_lines=$(grep -c '^Depends:' "${control}" || true)
+    if [[ "${depends_lines}" -ne 1 ]]; then
+        echo "[fail] expected exactly one 'Depends:' line in ${control}, found ${depends_lines}"
+        return 1
+    fi
+    sed -i.bak "s|^\(Depends:.*\)\$|\1, ${new_dep}|" "${control}"
+    rm -f "${control}.bak"
+    grep -q "^Depends:.*${new_dep}" "${control}"
+}
+
+# docker-ce: unpack, layer the WB overlay tree, inject the WB postinst snippet,
+# append the docker-compose-plugin Depends, bump Version, repack.
 repack_docker_ce() {
     local upstream="$1"
     local src="${SRC_DIR}/docker-ce_${upstream}_${ARCH}.deb"
@@ -150,6 +295,12 @@ repack_docker_ce() {
     rm -rf "${stage}"
     dpkg-deb -R "${src}" "${stage}"
 
+    inject_overlay "${stage}" "${OVERLAY_DIR}"
+    inject_postinst "${stage}" "${POSTINST_SNIPPET}" \
+        || { echo "[fail    ] postinst injection failed" >&2; exit 1; }
+    append_depends "${stage}/DEBIAN/control" \
+        "docker-compose-plugin (>= ${COMPOSE_VERSION})" \
+        || { echo "[fail    ] Depends patch failed" >&2; exit 1; }
     patch_version "${stage}/DEBIAN/control" "${upstream}" \
         || { echo "[fail    ] Version patch failed for docker-ce" >&2; exit 1; }
 
