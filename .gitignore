@@ -8,5 +8,7 @@
 # Local working docs — not part of the published package
 doc/
 
-# Local test artifacts and runner scripts — not part of the published package
-artifacts/
+# Build inputs and outputs under repack/ — not part of the published package
+repack/src/
+repack/out/
+repack/artifacts/

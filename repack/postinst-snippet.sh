@@ -7,6 +7,15 @@
 # This snippet is not a standalone executable: the repack script reads its body
 # (minus the shebang) and inlines it after `set -e` inside docker-ce's postinst,
 # wrapped in BEGIN/END markers.
+#
+# No postrm/prerm counterpart, by design. Everything this snippet creates is
+# meant to outlive package removal: Docker data, configs and daemon.json all
+# live under /mnt/data and must survive `apt purge docker-ce`, reinstall and
+# firmware upgrade. The /etc/docker and /var/lib/containerd symlinks left
+# behind point into /mnt/data and are harmless once the package is gone — a
+# reinstall re-validates and re-creates them. Wiping that state is an explicit,
+# user-driven action (see the "Удалить" section in README), not something a
+# package maintainer script should do automatically.
 
 # Only run our setup on `configure`. dpkg invokes postinst with arguments like
 # `configure <prev-version>` on install/upgrade, and `abort-upgrade`,
