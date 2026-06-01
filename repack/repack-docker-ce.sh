@@ -40,15 +40,24 @@ CONTAINERD_VERSION="${CONTAINERD_VERSION:-2.2.4}"
 COMPOSE_VERSION="${COMPOSE_VERSION:-5.1.4}"
 SUITE="${SUITE:-bullseye}"        # bullseye | trixie  (bookworm intentionally skipped — WB jumps bullseye → trixie)
 
-# Derive Debian major version from SUITE unless explicitly overridden.
-if [[ -z "${DEBIAN_NUM:-}" ]]; then
-    case "${SUITE}" in
-        bullseye) DEBIAN_NUM=11 ;;
-        trixie)   DEBIAN_NUM=13 ;;
-        *) echo "[fail] Unknown SUITE: ${SUITE}"; exit 1 ;;
-    esac
-fi
+# DEBIAN_NUM is derived from SUITE — no override on purpose. A mismatch
+# (e.g. SUITE=trixie + DEBIAN_NUM=11) would produce a non-existent upstream
+# filename and surface only as a 404 several MB later.
+case "${SUITE}" in
+    bullseye) DEBIAN_NUM=11 ;;
+    trixie)   DEBIAN_NUM=13 ;;
+    *) echo "[fail] Unknown SUITE: ${SUITE}" >&2; exit 1 ;;
+esac
 ARCH="${ARCH:-armhf}"             # armhf | arm64
+case "${ARCH}" in
+    armhf|arm64) ;;
+    *) echo "[fail] Unknown ARCH: ${ARCH} (expected armhf|arm64)" >&2; exit 1 ;;
+esac
+
+# WB_SUFFIX is interpolated into both filenames and DEBIAN/control's
+# Version: line. Restrict it up front so a typo (e.g. "wb100" without the
+# leading "+") fails fast with a clear message instead of producing a
+# broken Version string.
 WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
                                   # Leading "+" keeps the suffix inside
                                   # debian-revision
@@ -63,6 +72,11 @@ WB_SUFFIX="${WB_SUFFIX:-+wb100}"  # WB downstream marker for docker-ce only.
                                   # bumped. Reserved ranges +wb2xx and
                                   # +wb9xx left for future experimental and
                                   # hotfix streams.
+WB_SUFFIX_RE='^\+wb[0-9]+$'
+if ! [[ "${WB_SUFFIX}" =~ ${WB_SUFFIX_RE} ]]; then
+    echo "[fail] WB_SUFFIX must match '+wb<digits>' (got: '${WB_SUFFIX}')" >&2
+    exit 1
+fi
 
 # --- Layout ------------------------------------------------------------------
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,49 +85,69 @@ OUT_DIR="${HERE}/out"
 ART_DIR="${HERE}/artifacts"
 OVERLAY_DIR="${HERE}/overlay"
 POSTINST_SNIPPET="${HERE}/postinst-snippet.sh"
-mkdir -p "${SRC_DIR}" "${OUT_DIR}" "${ART_DIR}"
 
 DOCKER_CE_UPSTREAM="${DOCKER_CE_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
 CONTAINERD_UPSTREAM="${CONTAINERD_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
 COMPOSE_UPSTREAM="${COMPOSE_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
 BASE_URL="https://download.docker.com/linux/debian/dists/${SUITE}/pool/stable/${ARCH}"
 
-# --- 1. Download upstream .deb files ----------------------------------------
+# --- Helpers ----------------------------------------------------------------
+
+# Fetch one upstream .deb. `-nv` keeps the line count low but still prints
+# the URL and any HTTP error to stderr — so a wrong DOCKER_CE_VERSION shows
+# up as a clear "404 Not Found" instead of an opaque empty file. wget exits
+# non-zero on errors and `set -e` propagates that.
 fetch_one() {
     local name="$1" upstream="$2"
     local fname="${name}_${upstream}_${ARCH}.deb"
-    if [[ ! -f "${SRC_DIR}/${fname}" ]]; then
-        echo "[fetch] ${fname}"
-        wget -q -O "${SRC_DIR}/${fname}" "${BASE_URL}/${fname}"
-    else
-        echo "[skip ] ${fname} (cached)"
+    local url="${BASE_URL}/${fname}"
+
+    if [[ -f "${SRC_DIR}/${fname}" ]]; then
+        echo "[cached  ] ${fname}"
+        return 0
+    fi
+
+    echo "[download] ${url}"
+    if ! wget -nv -O "${SRC_DIR}/${fname}" "${url}"; then
+        rm -f "${SRC_DIR}/${fname}"
+        echo "[fail    ] could not download ${url}" >&2
+        exit 1
     fi
 }
 
-fetch_one docker-ce              "${DOCKER_CE_UPSTREAM}"
-fetch_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
-fetch_one containerd.io          "${CONTAINERD_UPSTREAM}"
-fetch_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
-
-# --- 2. Helpers --------------------------------------------------------------
-
-# Patch DEBIAN/control: Version: <upstream> -> Version: <upstream><WB_SUFFIX>.
-# Handles the epoched form (5:...) used by docker-ce / docker-ce-cli.
+# Patch DEBIAN/control: Version: 5:<upstream> -> Version: 5:<upstream><WB_SUFFIX>.
+#
+# docker-ce ships with a Debian epoch `5:` since 2017, when Docker Inc.
+# renumbered their releases from 1.13.x to a year-based scheme (17.03.x and
+# onward). Without the epoch dpkg would compare "17.03" against "1.13"
+# character-by-character and decide the new release is older; the `5:`
+# prefix overrides that. The epoch has been stable for the entire 17.x/
+# 18.x/19.x/20.x/24.x/26.x/29.x lifetime, so we anchor on it explicitly.
+# If upstream ever drops or bumps it, the up-front `grep -Fqx` fails loudly
+# with a clear "format changed" message instead of silently writing
+# nothing.
 patch_version() {
     local control="$1" upstream="$2"
-    local old_line new_line
+    local old_line="Version: 5:${upstream}"
+    local new_line="Version: 5:${upstream}${WB_SUFFIX}"
 
-    if grep -q "^Version: 5:${upstream}$" "${control}"; then
-        old_line="Version: 5:${upstream}"
-        new_line="Version: 5:${upstream}${WB_SUFFIX}"
-    else
-        old_line="Version: ${upstream}"
-        new_line="Version: ${upstream}${WB_SUFFIX}"
+    # `grep -Fqx`: fixed-string, whole-line match. Without -F the version
+    # would be treated as a regex and dots would match any character,
+    # turning the "format changed?" guard into a loose check.
+    if ! grep -Fqx -- "${old_line}" "${control}"; then
+        echo "[fail    ] expected '${old_line}' in ${control}; upstream Version format changed?" >&2
+        return 1
     fi
 
-    sed -i.bak "s|^${old_line}$|${new_line}|" "${control}"
+    echo "[version ] ${new_line#Version: }"
+    # Escape regex metachars in the sed pattern so a literal dot in the
+    # version doesn't match arbitrary characters. The replacement side
+    # stays literal because our version strings don't contain `&`, `\` or
+    # the chosen sed delimiter `|`.
+    local pattern="${old_line//./\\.}"
+    sed -i.bak "s|^${pattern}\$|${new_line}|" "${control}"
     rm -f "${control}.bak"
-    grep -q "^${new_line}$" "${control}"
+    grep -Fqx -- "${new_line}" "${control}"
 }
 
 # Inject the WB overlay tree into the unpacked docker-ce stage:
@@ -240,8 +274,6 @@ append_depends() {
     grep -q "^Depends:.*${new_dep}" "${control}"
 }
 
-# --- 3. Build ----------------------------------------------------------------
-
 # docker-ce: unpack, layer the WB overlay tree, inject the WB postinst snippet,
 # append the docker-compose-plugin Depends, bump Version, repack.
 repack_docker_ce() {
@@ -249,23 +281,27 @@ repack_docker_ce() {
     local src="${SRC_DIR}/docker-ce_${upstream}_${ARCH}.deb"
     local stage="${OUT_DIR}/docker-ce"
 
+    echo "[repack  ] docker-ce"
     rm -rf "${stage}"
     dpkg-deb -R "${src}" "${stage}"
 
     inject_overlay "${stage}" "${OVERLAY_DIR}"
     inject_postinst "${stage}" "${POSTINST_SNIPPET}" \
-        || { echo "[fail] postinst injection failed"; exit 1; }
+        || { echo "[fail    ] postinst injection failed" >&2; exit 1; }
     append_depends "${stage}/DEBIAN/control" \
         "docker-compose-plugin (>= ${COMPOSE_VERSION})" \
-        || { echo "[fail] Depends patch failed"; exit 1; }
+        || { echo "[fail    ] Depends patch failed" >&2; exit 1; }
     patch_version "${stage}/DEBIAN/control" "${upstream}" \
-        || { echo "[fail] Version patch failed for docker-ce"; exit 1; }
+        || { echo "[fail    ] Version patch failed for docker-ce" >&2; exit 1; }
 
     # --root-owner-group: build env runs as the user; without this flag the
     # tarball would carry uid=501 and dpkg --install would refuse it.
+    # Output is a directory: dpkg-deb auto-derives the canonical filename
+    # `${Package}_${Version}_${Architecture}.deb` from DEBIAN/control, so the
+    # WB suffix is preserved in the artifact name.
     dpkg-deb --root-owner-group -b "${stage}" "${ART_DIR}/" >/dev/null
 
-    echo "[ok  ] docker-ce${WB_SUFFIX}"
+    echo "[ok      ] docker-ce${WB_SUFFIX}"
 }
 
 # Mirror an upstream .deb as-is: same filename, same Version, identical bytes.
@@ -276,14 +312,30 @@ mirror_one() {
     local fname="${name}_${upstream}_${ARCH}.deb"
 
     cp -f "${SRC_DIR}/${fname}" "${ART_DIR}/${fname}"
-    echo "[mirr] ${fname}"
+    echo "[mirror  ] ${fname}"
 }
 
-repack_docker_ce "${DOCKER_CE_UPSTREAM}"
-mirror_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
-mirror_one containerd.io          "${CONTAINERD_UPSTREAM}"
-mirror_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
+# --- Entry point ------------------------------------------------------------
 
-echo
-echo "Artefacts:"
-ls -lh "${ART_DIR}"
+main() {
+    mkdir -p "${SRC_DIR}" "${OUT_DIR}" "${ART_DIR}"
+
+    fetch_one docker-ce              "${DOCKER_CE_UPSTREAM}"
+    # docker-ce-cli is released by Docker Inc. in lockstep with docker-ce
+    # itself and shares the same upstream version string — that's why
+    # DOCKER_CE_UPSTREAM is reused for it.
+    fetch_one docker-ce-cli          "${DOCKER_CE_UPSTREAM}"
+    fetch_one containerd.io          "${CONTAINERD_UPSTREAM}"
+    fetch_one docker-compose-plugin  "${COMPOSE_UPSTREAM}"
+
+    repack_docker_ce "${DOCKER_CE_UPSTREAM}"
+    mirror_one docker-ce-cli         "${DOCKER_CE_UPSTREAM}"
+    mirror_one containerd.io         "${CONTAINERD_UPSTREAM}"
+    mirror_one docker-compose-plugin "${COMPOSE_UPSTREAM}"
+
+    echo
+    echo "Artefacts:"
+    ls -lh "${ART_DIR}"
+}
+
+main "$@"
