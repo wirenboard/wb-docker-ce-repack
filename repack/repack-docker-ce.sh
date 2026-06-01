@@ -28,8 +28,8 @@
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
 #                                        /mnt/data/etc/docker/ on install.
 #
-# Requires: wget, dpkg-deb, md5sum, tar (all present on macOS via Homebrew or
-# coreutils, and stock on Debian).
+# Requires: wget, dpkg-deb, md5sum (or gmd5sum from coreutils on macOS), tar.
+# On macOS: `brew install wget dpkg coreutils`; all stock on Debian.
 # Run from repo root: bash repack/repack-docker-ce.sh
 
 set -euo pipefail
@@ -85,6 +85,16 @@ OUT_DIR="${HERE}/out"
 ART_DIR="${HERE}/artifacts"
 OVERLAY_DIR="${HERE}/overlay"
 POSTINST_SNIPPET="${HERE}/postinst-snippet.sh"
+
+# Resolve the md5 tool. GNU coreutils ships `md5sum` on Linux; on macOS
+# `brew install coreutils` exposes it as `gmd5sum` (the unprefixed name lives
+# under libexec/gnubin, not on PATH by default). Accept either so the macOS
+# quick start works without extra PATH surgery.
+MD5SUM="$(command -v md5sum || command -v gmd5sum || true)"
+if [[ -z "${MD5SUM}" ]]; then
+    echo "[fail] need md5sum or gmd5sum on PATH (macOS: 'brew install coreutils' provides gmd5sum)" >&2
+    exit 1
+fi
 
 DOCKER_CE_UPSTREAM="${DOCKER_CE_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
 CONTAINERD_UPSTREAM="${CONTAINERD_VERSION}-1~debian.${DEBIAN_NUM}~${SUITE}"
@@ -167,7 +177,7 @@ inject_overlay() {
             | sed 's|^\./||' \
             | sort \
             | while read -r path; do
-                  ( cd "${stage}" && md5sum "${path}" )
+                  ( cd "${stage}" && "${MD5SUM}" "${path}" )
               done
     ) >> "${md5sums}"
 
@@ -235,7 +245,7 @@ inject_postinst() {
         BEGIN { injected = 0 }
         {
             print
-            if (!injected && $0 ~ /^set -e[[:space:]]*$/) {
+            if (!injected && $0 ~ /^set -e/) {
                 print ""
                 print "# --- BEGIN wb-docker setup ---"
                 while ((getline line < body_file) > 0) print line

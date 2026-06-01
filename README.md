@@ -37,7 +37,8 @@ repack/
 ### Собрать пакеты на своей машине
 
 Требуется Linux с `wget`, `dpkg-deb`, `md5sum`, `tar`
-(или на macOS — `brew install wget dpkg coreutils`).
+(или на macOS — `brew install wget dpkg coreutils`; coreutils ставит `gmd5sum`,
+скрипт сборки подхватывает его автоматически).
 
 ```bash
 # По умолчанию: bullseye / armhf
