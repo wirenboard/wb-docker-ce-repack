@@ -20,9 +20,9 @@
 #        e. repack with dpkg-deb --root-owner-group.
 #   3. docker-ce-cli, containerd.io and docker-compose-plugin are mirrored
 #      as-is from src/ into artifacts/ — same upstream filename, same Version,
-#      byte-identical contents. They live next to docker-ce in the WB apt
-#      repo only so apt can resolve docker-ce's strict Depends from a single
-#      source.
+#      byte-identical contents. They live in the WB apt repo so Docker installs
+#      entirely from WB (a stock WB controller has no upstream Docker repo
+#      configured) and docker-ce's strict versioned Depends resolve there.
 #
 # The overlay (see repack/overlay/) ships:
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
@@ -315,8 +315,8 @@ repack_docker_ce() {
 }
 
 # Mirror an upstream .deb as-is: same filename, same Version, identical bytes.
-# Lives in our apt repo only to satisfy docker-ce's strict Depends from a
-# single source.
+# Lives in our apt repo so Docker installs entirely from WB (the controller has
+# no upstream Docker repo) and docker-ce's strict versioned Depends resolve there.
 mirror_one() {
     local name="$1" upstream="$2"
     local fname="${name}_${upstream}_${ARCH}.deb"
