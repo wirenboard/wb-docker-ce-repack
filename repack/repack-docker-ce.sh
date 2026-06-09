@@ -34,6 +34,16 @@
 
 set -euo pipefail
 
+# Single source of truth: auto-source versions.env from the repo root (one level
+# up from this script) when present, so a MANUAL run uses the same versions as CI
+# instead of silently drifting from the fallback defaults below. CI also sources
+# it first; re-sourcing the same file is idempotent. The "${VAR:-default}" lines
+# below remain only as a last-resort fallback if versions.env is absent.
+_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "${_REPO_ROOT}/versions.env" ]; then
+    set -a; . "${_REPO_ROOT}/versions.env"; set +a
+fi
+
 # --- Inputs (override via env) ----------------------------------------------
 DOCKER_CE_VERSION="${DOCKER_CE_VERSION:-29.5.2}"
 CONTAINERD_VERSION="${CONTAINERD_VERSION:-2.2.4}"
