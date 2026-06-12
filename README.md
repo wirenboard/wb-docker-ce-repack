@@ -110,6 +110,19 @@ rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
        /mnt/data/var/lib/containerd
 ```
 
+## Сборка в CI
+
+Сборкой занимается Jenkins-джоба
+[wirenboard/wb-docker](https://jenkins.wirenboard.com/job/wirenboard/job/wb-docker/):
+она запускается на каждый push и PR. Локальный `Jenkinsfile` — однострочный
+вызов `buildDockerRepack()`, вся логика пайплайна живёт в shared-библиотеке
+jenkins-pipeline-lib:
+[vars/buildDockerRepack.groovy](https://github.com/wirenboard/jenkins-pipeline-lib/blob/master/vars/buildDockerRepack.groovy).
+
+Операционная инструкция по перепаковке новой версии —
+[Перепаковка Docker для Wiren Board](https://docs.google.com/document/d/1SS1GXR9tSsovYjIU3ILNvEqS7ZJKOOznjiLtqoGcz34/edit?tab=t.0)
+(Google Drive).
+
 ## Полная документация
 
 - Краткая операционная инструкция по перепаковке новой версии —
