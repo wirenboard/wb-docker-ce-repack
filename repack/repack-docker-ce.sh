@@ -20,9 +20,9 @@
 #        e. repack with dpkg-deb --root-owner-group.
 #   3. docker-ce-cli, containerd.io and docker-compose-plugin are mirrored
 #      as-is from src/ into artifacts/ — same upstream filename, same Version,
-#      byte-identical contents. They live next to docker-ce in the WB apt
-#      repo only so apt can resolve docker-ce's strict Depends from a single
-#      source.
+#      byte-identical contents. They live in the WB apt repo so Docker installs
+#      entirely from WB (a stock WB controller has no upstream Docker repo
+#      configured) and docker-ce's strict versioned Depends resolve there.
 #
 # The overlay (see repack/overlay/) ships:
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
@@ -33,6 +33,16 @@
 # Run from repo root: bash repack/repack-docker-ce.sh
 
 set -euo pipefail
+
+# Single source of truth: auto-source versions.env from the repo root (one level
+# up from this script) when present, so a MANUAL run uses the same versions as CI
+# instead of silently drifting from the fallback defaults below. CI also sources
+# it first; re-sourcing the same file is idempotent. The "${VAR:-default}" lines
+# below remain only as a last-resort fallback if versions.env is absent.
+_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "${_REPO_ROOT}/versions.env" ]; then
+    set -a; . "${_REPO_ROOT}/versions.env"; set +a
+fi
 
 # --- Inputs (override via env) ----------------------------------------------
 DOCKER_CE_VERSION="${DOCKER_CE_VERSION:-29.5.2}"
@@ -315,8 +325,8 @@ repack_docker_ce() {
 }
 
 # Mirror an upstream .deb as-is: same filename, same Version, identical bytes.
-# Lives in our apt repo only to satisfy docker-ce's strict Depends from a
-# single source.
+# Lives in our apt repo so Docker installs entirely from WB (the controller has
+# no upstream Docker repo) and docker-ce's strict versioned Depends resolve there.
 mirror_one() {
     local name="$1" upstream="$2"
     local fname="${name}_${upstream}_${ARCH}.deb"
