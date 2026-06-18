@@ -93,7 +93,34 @@ if [ "$1" = "configure" ]; then
     }
 
     migrate_rootfs_to_persistent "$ROOTFS_ETC_DOCKER" "$PERSISTENT_ETC_DOCKER" || true
+
+    # Did /var/lib/containerd need migrating (real dir, or symlink elsewhere)
+    # before the call below? Drives the containerd restart further down.
+    containerd_was_migrated=no
+    if [ -L "$ROOTFS_CONTAINERD" ]; then
+        [ "$(readlink "$ROOTFS_CONTAINERD")" = "$PERSISTENT_CONTAINERD" ] || containerd_was_migrated=yes
+    elif [ -e "$ROOTFS_CONTAINERD" ]; then
+        containerd_was_migrated=yes
+    fi
+
     migrate_rootfs_to_persistent "$ROOTFS_CONTAINERD" "$PERSISTENT_CONTAINERD" || true
+
+    # containerd.io started containerd before this postinst, so it has meta.db open
+    # on the old rootfs /var/lib/containerd. The migration symlinked that onto
+    # /mnt/data; restart containerd so it reopens meta.db there instead of writing
+    # to the now-deleted rootfs inode, which is dropped on reboot (losing all
+    # image/container metadata). Only when we actually migrated.
+    if [ "$containerd_was_migrated" = yes ] && \
+       [ -L "$ROOTFS_CONTAINERD" ] && \
+       [ "$(readlink "$ROOTFS_CONTAINERD")" = "$PERSISTENT_CONTAINERD" ] && \
+       [ -d /run/systemd/system ]; then
+        systemctl daemon-reload 2>/dev/null || true
+        if systemctl is-active --quiet containerd.service 2>/dev/null; then
+            log "restarting containerd to reopen meta.db on ${PERSISTENT_CONTAINERD}"
+            systemctl restart containerd.service || \
+                log "WARN: containerd restart failed — restart it before rebooting"
+        fi
+    fi
 
     # Migrate data laid down by the legacy community installer
     # (https://github.com/wirenboard/wb-community/blob/main/scripts/docker-install/wb-docker-manager.sh):
