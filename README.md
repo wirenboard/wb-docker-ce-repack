@@ -110,6 +110,36 @@ rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
        /mnt/data/var/lib/containerd
 ```
 
+## Переход со старого Docker
+
+Если на контроллере уже стоял другой Docker (`docker.io` или более старый
+`docker-ce`) с образами и контейнерами — перенести их в WB Docker автоматически
+нельзя. Причин две:
+
+- WB Docker держит data-root на `/mnt/data` (`/mnt/data/docker/lib`), а прежний
+  Docker — в `/var/lib/docker` на rootfs;
+- Docker 29 по умолчанию использует containerd image store, который не читает
+  старый overlay2-стор: такие образы становятся невидимы (`docker images` пуст),
+  хотя данные остаются на диске.
+
+Docker не умеет надёжно мигрировать стор между версиями. Единственный надёжный
+путь — **до установки** WB Docker выгрузить нужные образы на старом Docker:
+
+```bash
+docker save my-image:tag -o /mnt/data/my-image.tar   # или docker push в registry
+```
+
+и после установки загрузить обратно:
+
+```bash
+docker load -i /mnt/data/my-image.tar
+```
+
+Данные в томах (`/var/lib/docker/volumes`) `docker save` не покрывает —
+бэкапьте их отдельно. Установка WB Docker прежний `/var/lib/docker` не удаляет:
+при установке в лог `apt` выводится предупреждение, а данные остаются на диске и
+их можно забрать вручную.
+
 ## Сборка в CI
 
 Сборкой занимается Jenkins-джоба

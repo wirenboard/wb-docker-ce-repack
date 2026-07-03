@@ -238,4 +238,33 @@ if [ "$1" = "configure" ]; then
         fi
     fi
 
+    # Warn about data left behind by a previous Docker (docker.io or an older
+    # docker-ce) in the rootfs /var/lib/docker. WB Docker keeps data-root on
+    # /mnt/data and, on 29.x, defaults to the containerd image store — neither
+    # reads the old overlay2 graph store, so those images/containers are invisible
+    # to the new daemon. We deliberately do NOT touch that data: migrating a graph
+    # store across Docker versions/backends isn't reliably automatable (upstream
+    # itself only offers `docker save`/registry push from the old daemon, which is
+    # already gone by the time this runs). Just tell the user it is there.
+    ROOTFS_DOCKER_DATA=/var/lib/docker
+    if [ -d "$ROOTFS_DOCKER_DATA" ] && [ ! -L "$ROOTFS_DOCKER_DATA" ] && \
+       { [ -d "$ROOTFS_DOCKER_DATA/image" ] || \
+         [ -d "$ROOTFS_DOCKER_DATA/overlay2" ] || \
+         [ -d "$ROOTFS_DOCKER_DATA/containers" ]; }; then
+        # Suppress the warning if the active daemon.json pins data-root back at
+        # /var/lib/docker — then that data is actually in use, nothing is hidden.
+        if [ -f "$DAEMON_JSON_TARGET" ] && \
+           grep -q '"data-root"[[:space:]]*:[[:space:]]*"/var/lib/docker"' "$DAEMON_JSON_TARGET"; then
+            :
+        else
+            log "WARNING: found data from a previous Docker in ${ROOTFS_DOCKER_DATA}"
+            log "  (docker.io or an older docker-ce). WB Docker stores data on /mnt/data and"
+            log "  on 29.x uses the containerd image store, so those images and containers"
+            log "  are NOT visible in 'docker images' / 'docker ps -a'."
+            log "  The data is NOT deleted — it stays in ${ROOTFS_DOCKER_DATA}. Migrating it"
+            log "  across Docker versions cannot be automated; see"
+            log "  https://wiki.wirenboard.com/wiki/Docker"
+        fi
+    fi
+
 fi
