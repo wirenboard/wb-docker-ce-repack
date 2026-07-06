@@ -129,7 +129,7 @@ rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
 
 ## Переход со старого Docker
 
-«Старый» здесь — любой Docker не из этого репака: `docker.io` из Debian или
+«Старый» здесь — любой Docker не из этой WB-сборки: `docker.io` из Debian или
 `docker-ce` напрямую с download.docker.com. Его образы и контейнеры лежат в
 `/var/lib/docker` на rootfs (уже установленный WB Docker сюда не попадает — он
 держит данные на `/mnt/data`). Перенести их в WB Docker автоматически нельзя.
