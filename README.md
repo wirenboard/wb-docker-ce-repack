@@ -60,7 +60,7 @@ repack/
 скрипт сборки подхватывает его автоматически).
 
 ```bash
-# По умолчанию берёт suite/арки из versions.env
+# По умолчанию: bullseye / armhf; версии берёт из versions.env
 bash repack/repack-docker-ce.sh
 
 # Или явно задать suite и архитектуру:
