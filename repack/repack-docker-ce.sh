@@ -48,7 +48,7 @@ fi
 DOCKER_CE_VERSION="${DOCKER_CE_VERSION:-29.5.2}"
 CONTAINERD_VERSION="${CONTAINERD_VERSION:-2.2.4}"
 COMPOSE_VERSION="${COMPOSE_VERSION:-5.1.4}"
-SUITE="${SUITE:-bullseye}"        # bullseye | trixie  (bookworm intentionally skipped — WB jumps bullseye → trixie)
+SUITE="${SUITE:-trixie}"          # bullseye | trixie  (bookworm intentionally skipped — WB jumps bullseye → trixie)
 
 # DEBIAN_NUM is derived from SUITE — no override on purpose. A mismatch
 # (e.g. SUITE=trixie + DEBIAN_NUM=11) would produce a non-existent upstream

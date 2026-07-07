@@ -60,7 +60,7 @@ repack/
 скрипт сборки подхватывает его автоматически).
 
 ```bash
-# По умолчанию: bullseye / armhf; версии берёт из versions.env
+# По умолчанию: trixie / armhf; версии берёт из versions.env
 bash repack/repack-docker-ce.sh
 
 # Или явно задать suite и архитектуру:
@@ -176,7 +176,6 @@ jenkins-pipeline-lib:
 - Архитектура и обоснования решений —
   [Архитектура и решения по перепаковке Docker](https://docs.google.com/document/d/1euyEGmuH-pTFkhabeNXJLJFl5f-1zrSwjaRvOHXki2g/edit)
   (Google Drive).
-
 
 ## Ссылки
 
