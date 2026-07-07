@@ -162,7 +162,7 @@ docker load -i /mnt/data/my-image.tar
 ## Сборка в CI
 
 Сборкой занимается Jenkins-джоба
-[wirenboard/wb-docker](https://jenkins.wirenboard.com/job/wirenboard/job/wb-docker/):
+[wirenboard/wb-docker-ce-repack](https://jenkins.wirenboard.com/job/wirenboard/job/wb-docker-ce-repack/):
 она запускается на каждый push и PR. Локальный `Jenkinsfile` — однострочный
 вызов `buildDockerRepack()`, вся логика пайплайна живёт в shared-библиотеке
 jenkins-pipeline-lib:
