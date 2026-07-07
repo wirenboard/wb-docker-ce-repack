@@ -1,11 +1,28 @@
 # wb-docker
 
-Downstream-репак Docker для контроллеров Wiren Board.
+Инструмент сборки готовых пакетов Docker для контроллеров Wiren Board. Берёт
+официальный Docker с download.docker.com и перепаковывает его так, чтобы на
+контроллере он ставился и настраивался одной командой, без ручной донастройки.
+
+## Зачем это нужно
+
+Установка Docker на контроллер обычно требует ручной возни, а часть настроек на
+WB нестандартна. Всё это встроено в установку пакета:
+
+1. **Данные на постоянном разделе.** Обычный Docker кладёт данные в
+   `/var/lib/docker` на rootfs — там мало места, и после перезагрузки образы и
+   контейнеры пропадают. Пакет переносит data-root на `/mnt/data`.
+2. **Сеть.** Для работы NAT контейнеров на WB нужен backend iptables-legacy —
+   пакет включает его автоматически.
+3. **Zero-config.** Симлинки, `daemon.json` и data-root выставляются на
+   установке: после `apt install docker-ce` Docker готов к работе без
+   какой-либо донастройки.
+
+## Что ставится
 
 Команда `apt install docker-ce` на WB-контроллере ставит сразу четыре пакета
 (`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`)
-с WB-специфичной интеграцией, спрятанной внутрь `docker-ce`. Все настройки
-data-root, симлинков и iptables-backend делаются автоматически на установке.
+с WB-специфичной интеграцией, спрятанной внутрь `docker-ce`.
 
 ## Версионирование
 
@@ -109,6 +126,38 @@ apt purge docker-ce && apt autoremove --purge
 rm -rf /mnt/data/docker /mnt/data/.docker /mnt/data/etc/docker \
        /mnt/data/var/lib/containerd
 ```
+
+## Переход со старого Docker
+
+«Старый» здесь — любой Docker не из этой WB-сборки: `docker.io` из Debian или
+`docker-ce` напрямую с download.docker.com. Его образы и контейнеры лежат в
+`/var/lib/docker` на rootfs (уже установленный WB Docker сюда не попадает — он
+держит данные на `/mnt/data`). Перенести их в WB Docker автоматически нельзя.
+Причин две:
+
+- WB Docker держит data-root на `/mnt/data` (`/mnt/data/docker/lib`), а прежний
+  Docker — в `/var/lib/docker` на rootfs;
+- Docker 29 по умолчанию использует containerd image store, который не читает
+  старый overlay2-стор: такие образы становятся невидимы (`docker images` пуст),
+  хотя данные остаются на диске.
+
+Docker не умеет надёжно мигрировать стор между версиями. Единственный надёжный
+путь — **до установки** WB Docker выгрузить нужные образы на старом Docker:
+
+```bash
+docker save my-image:tag -o /mnt/data/my-image.tar   # или docker push в registry
+```
+
+и после установки загрузить обратно:
+
+```bash
+docker load -i /mnt/data/my-image.tar
+```
+
+Данные в томах (`/var/lib/docker/volumes`) `docker save` не покрывает —
+бэкапьте их отдельно. Установка WB Docker прежний `/var/lib/docker` не удаляет:
+при установке в лог `apt` выводится предупреждение, а данные остаются на диске и
+их можно забрать вручную.
 
 ## Сборка в CI
 
