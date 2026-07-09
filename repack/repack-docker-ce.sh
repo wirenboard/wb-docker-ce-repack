@@ -27,6 +27,8 @@
 # The overlay (see repack/overlay/) ships:
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
 #                                        /mnt/data/etc/docker/ on install.
+#   /etc/systemd/system/containerd.service.d/mnt-data.conf — orders containerd
+#                                        after /mnt/data is mounted.
 #
 # Requires: wget, dpkg-deb, md5sum (or gmd5sum from coreutils on macOS), tar.
 # On macOS: `brew install wget dpkg coreutils`; all stock on Debian.
