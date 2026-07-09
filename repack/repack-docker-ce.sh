@@ -27,6 +27,8 @@
 # The overlay (see repack/overlay/) ships:
 #   /usr/share/wb-docker/daemon.json   — daemon.json template, seeded into
 #                                        /mnt/data/etc/docker/ on install.
+#   /etc/systemd/system/containerd.service.d/mnt-data.conf — orders containerd
+#                                        after /mnt/data is mounted.
 #
 # Requires: wget, dpkg-deb, md5sum (or gmd5sum from coreutils on macOS), tar.
 # On macOS: `brew install wget dpkg coreutils`; all stock on Debian.
@@ -48,7 +50,7 @@ fi
 DOCKER_CE_VERSION="${DOCKER_CE_VERSION:-29.5.2}"
 CONTAINERD_VERSION="${CONTAINERD_VERSION:-2.2.4}"
 COMPOSE_VERSION="${COMPOSE_VERSION:-5.1.4}"
-SUITE="${SUITE:-bullseye}"        # bullseye | trixie  (bookworm intentionally skipped — WB jumps bullseye → trixie)
+SUITE="${SUITE:-trixie}"          # bullseye | trixie  (bookworm intentionally skipped — WB jumps bullseye → trixie)
 
 # DEBIAN_NUM is derived from SUITE — no override on purpose. A mismatch
 # (e.g. SUITE=trixie + DEBIAN_NUM=11) would produce a non-existent upstream
